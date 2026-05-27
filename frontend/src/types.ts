@@ -2,8 +2,11 @@ export type Area = {
   id: number;
   code: string;
   name: string;
+  table_start?: number;
+  table_end?: number;
   function_enabled: number | boolean;
   active: number | boolean;
+  sort_order?: number;
 };
 
 export type OpeningHour = {

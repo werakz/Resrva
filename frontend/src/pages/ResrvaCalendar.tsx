@@ -1,10 +1,10 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { ChevronLeft, ChevronRight, Users } from "lucide-react";
 import { apiFetch } from "../lib/api";
 import type { Area, Booking, TableRecord } from "../types";
-import { selectClass } from "../components/resrva/FormField";
 import { LoadingState } from "../components/resrva/LoadingState";
 import { StatusBadge } from "../components/resrva/StatusBadge";
+import { Modal } from "../components/ui/modal";
 
 type TablesPayload = {
   areas: Area[];
@@ -17,7 +17,14 @@ type DayStats = {
   load: number;
 };
 
+type MealFilter = "all" | "lunch" | "dinner";
+
 const weekDays = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+const mealFilters: Array<{ value: MealFilter; label: string }> = [
+  { value: "all", label: "All" },
+  { value: "lunch", label: "Lunch" },
+  { value: "dinner", label: "Dinner" },
+];
 
 function toIsoDate(date: Date): string {
   const year = date.getFullYear();
@@ -25,12 +32,6 @@ function toIsoDate(date: Date): string {
   const day = String(date.getDate()).padStart(2, "0");
 
   return `${year}-${month}-${day}`;
-}
-
-function parseIsoDate(value: string): Date {
-  const [year, month, day] = value.split("-").map(Number);
-
-  return new Date(year, month - 1, day);
 }
 
 function addDays(date: Date, days: number): Date {
@@ -56,12 +57,14 @@ function monthTitle(date: Date): string {
 }
 
 function displayDate(value: string): string {
+  const [year, month, day] = value.split("-").map(Number);
+
   return new Intl.DateTimeFormat("en-AU", {
-    weekday: "short",
+    weekday: "long",
     day: "numeric",
-    month: "short",
+    month: "long",
     year: "numeric",
-  }).format(parseIsoDate(value));
+  }).format(new Date(year, month - 1, day));
 }
 
 function displayTime(value: string): string {
@@ -73,30 +76,24 @@ function displayTime(value: string): string {
   return `${displayHours}:${minutesText} ${suffix}`;
 }
 
-function parseIds(value?: string | null): string[] {
-  return value
-    ? value
-        .split(",")
-        .map((id) => id.trim())
-        .filter(Boolean)
-    : [];
+function minutesFromTime(time: string): number {
+  const [hours = "0", minutes = "0"] = time.slice(0, 5).split(":");
+
+  return Number(hours) * 60 + Number(minutes);
 }
 
-function bookingAreaIds(booking: Booking): string[] {
-  const functionAreaIds = parseIds(booking.assigned_area_ids);
-  if (functionAreaIds.length) return functionAreaIds;
-
-  return booking.assigned_area_id ? [String(booking.assigned_area_id)] : [];
+function pluralize(count: number, label: string): string {
+  return `${count} ${label}${count === 1 ? "" : "s"}`;
 }
 
 function bookingAreaLabel(booking: Booking): string {
-  return booking.assigned_area_names || booking.assigned_area_name || "Unassigned";
+  return booking.assigned_area_names || booking.assigned_area_name || booking.preferred_area_name || "Unassigned";
 }
 
 function bookingEventLabel(booking: Booking): string {
   if (booking.booking_type === "table") return "Table booking";
 
-  return booking.event_type || "Function";
+  return "Function";
 }
 
 function calendarStart(month: Date): Date {
@@ -153,33 +150,14 @@ function loadStyle(load: number) {
   };
 }
 
-function eventTypeOptions(bookings: Booking[]) {
-  const functionTypes = Array.from(
-    new Set(
-      bookings
-        .filter((booking) => booking.booking_type === "function" && booking.event_type)
-        .map((booking) => String(booking.event_type)),
-    ),
-  ).sort((left, right) => left.localeCompare(right));
-
-  return [
-    { value: "all", label: "All event types" },
-    { value: "tables", label: "Table bookings" },
-    { value: "functions", label: "Functions" },
-    ...functionTypes.map((type) => ({ value: type, label: type })),
-  ];
-}
-
 export default function ResrvaCalendar() {
   const [items, setItems] = useState<Booking[] | null>(null);
   const [tablesData, setTablesData] = useState<TablesPayload | null>(null);
   const [currentMonth, setCurrentMonth] = useState(() => startOfMonth(new Date()));
   const [selectedDate, setSelectedDate] = useState(() => toIsoDate(new Date()));
-  const [listWidth, setListWidth] = useState(360);
-  const [areaFilter, setAreaFilter] = useState("all");
-  const [eventTypeFilter, setEventTypeFilter] = useState("all");
+  const [mealFilter, setMealFilter] = useState<MealFilter>("all");
   const [error, setError] = useState("");
-  const splitRef = useRef<HTMLDivElement | null>(null);
+  const [detailsOpen, setDetailsOpen] = useState(false);
 
   const loadCalendar = () => {
     setError("");
@@ -195,36 +173,32 @@ export default function ResrvaCalendar() {
     loadCalendar();
   }, []);
 
-  const eventOptions = useMemo(() => eventTypeOptions(items || []), [items]);
-
   const filteredItems = useMemo(() => {
     return (items || []).filter((booking) => {
-      const areaMatches = areaFilter === "all" || bookingAreaIds(booking).includes(areaFilter);
-      const eventMatches =
-        eventTypeFilter === "all" ||
-        (eventTypeFilter === "tables" && booking.booking_type === "table") ||
-        (eventTypeFilter === "functions" && booking.booking_type === "function") ||
-        booking.event_type === eventTypeFilter;
+      const mealMatches =
+        mealFilter === "all" ||
+        (mealFilter === "lunch"
+          ? minutesFromTime(booking.start_time) < 17 * 60
+          : minutesFromTime(booking.start_time) >= 17 * 60);
 
-      return areaMatches && eventMatches;
+      return mealMatches;
     });
-  }, [areaFilter, eventTypeFilter, items]);
+  }, [items, mealFilter]);
 
   const dailyCapacity = useMemo(() => {
     if (!tablesData) return 1;
 
     const activeTables = tablesData.tables.filter((table) => {
       const isActive = Boolean(Number(table.active));
-      const areaMatches = areaFilter === "all" || String(table.area_id) === areaFilter;
 
-      return isActive && areaMatches;
+      return isActive;
     });
 
     return Math.max(
       activeTables.reduce((total, table) => total + Number(table.capacity || 0), 0),
       1,
     );
-  }, [areaFilter, tablesData]);
+  }, [tablesData]);
 
   const statsByDate = useMemo(() => {
     const map = new Map<string, DayStats>();
@@ -241,7 +215,15 @@ export default function ResrvaCalendar() {
   }, [dailyCapacity, filteredItems]);
 
   const visibleDays = useMemo(() => calendarDays(currentMonth), [currentMonth]);
-  const selectedBookings = statsByDate.get(selectedDate)?.bookings || [];
+  const selectedBookings = useMemo(() => {
+    return (statsByDate.get(selectedDate)?.bookings || [])
+      .slice()
+      .sort((left, right) => left.start_time.localeCompare(right.start_time));
+  }, [selectedDate, statsByDate]);
+  const selectedGuestCount = selectedBookings.reduce(
+    (total, booking) => total + Number(booking.guest_count || 0),
+    0,
+  );
 
   const setMonth = (nextMonth: Date) => {
     const month = startOfMonth(nextMonth);
@@ -249,37 +231,9 @@ export default function ResrvaCalendar() {
     setSelectedDate(toIsoDate(month));
   };
 
-  const startResize = (event: React.PointerEvent<HTMLButtonElement>) => {
-    event.preventDefault();
-    const container = splitRef.current;
-    if (!container) return;
-
-    const updateWidth = (clientX: number) => {
-      const rect = container.getBoundingClientRect();
-      const minimumListWidth = 280;
-      const minimumCalendarWidth = 520;
-      const maximumListWidth = Math.max(minimumListWidth, rect.width - minimumCalendarWidth);
-      const nextWidth = rect.right - clientX;
-
-      setListWidth(Math.min(Math.max(nextWidth, minimumListWidth), maximumListWidth));
-    };
-
-    updateWidth(event.clientX);
-
-    const handlePointerMove = (moveEvent: PointerEvent) => updateWidth(moveEvent.clientX);
-    const stopResize = () => {
-      document.body.style.cursor = "";
-      document.body.style.userSelect = "";
-      window.removeEventListener("pointermove", handlePointerMove);
-      window.removeEventListener("pointerup", stopResize);
-      window.removeEventListener("pointercancel", stopResize);
-    };
-
-    document.body.style.cursor = "col-resize";
-    document.body.style.userSelect = "none";
-    window.addEventListener("pointermove", handlePointerMove);
-    window.addEventListener("pointerup", stopResize);
-    window.addEventListener("pointercancel", stopResize);
+  const openDateDetails = (date: string) => {
+    setSelectedDate(date);
+    setDetailsOpen(true);
   };
 
   if (error) {
@@ -293,7 +247,7 @@ export default function ResrvaCalendar() {
   return (
     <>
       <section className="rounded-2xl border border-gray-200 bg-white shadow-theme-xs dark:border-gray-800 dark:bg-white/[0.03]">
-        <div className="flex flex-col gap-4 border-b border-gray-200 p-4 dark:border-gray-800 xl:flex-row xl:items-center xl:justify-between">
+        <div className="flex flex-col gap-3 border-b border-gray-200 p-3 dark:border-gray-800 xl:flex-row xl:items-center xl:justify-between">
           <div className="flex flex-wrap items-center gap-2">
             <button
               type="button"
@@ -327,51 +281,43 @@ export default function ResrvaCalendar() {
             </button>
           </div>
 
-          <div className="grid w-full max-w-full gap-3 sm:grid-cols-2 xl:w-[520px]">
-            <select
-              className={selectClass}
-              value={areaFilter}
-              onChange={(event) => setAreaFilter(event.target.value)}
-              aria-label="Area filter"
-            >
-              <option value="all">All areas</option>
-              {tablesData.areas.map((area) => (
-                <option key={area.id} value={area.id}>
-                  {area.name}
-                </option>
-              ))}
-            </select>
-            <select
-              className={selectClass}
-              value={eventTypeFilter}
-              onChange={(event) => setEventTypeFilter(event.target.value)}
-              aria-label="Event type filter"
-            >
-              {eventOptions.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
+          <div className="flex w-full max-w-full flex-col gap-3 lg:flex-row lg:items-center xl:w-auto">
+            <div className="inline-flex h-11 shrink-0 rounded-lg border border-gray-200 bg-gray-50 p-1 dark:border-gray-800 dark:bg-gray-900">
+              {mealFilters.map((filter) => {
+                const active = mealFilter === filter.value;
+
+                return (
+                  <button
+                    key={filter.value}
+                    type="button"
+                    aria-pressed={active}
+                    onClick={() => setMealFilter(filter.value)}
+                    className={`min-w-16 rounded-md px-3 text-sm font-medium transition ${
+                      active
+                        ? "bg-white text-brand-600 shadow-theme-xs dark:bg-white/[0.08] dark:text-brand-400"
+                        : "text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-white/90"
+                    }`}
+                  >
+                    {filter.label}
+                  </button>
+                );
+              })}
+            </div>
           </div>
         </div>
 
-        <div
-          ref={splitRef}
-          className="resrva-calendar-split"
-          style={{ "--calendar-list-width": `${listWidth}px` } as React.CSSProperties}
-        >
+        <div className="resrva-calendar-split">
           <div className="min-w-0">
             <div className="w-full min-w-0">
               <div className="grid grid-cols-[repeat(7,minmax(0,1fr))] border-b border-gray-200 bg-gray-50 dark:border-gray-800 dark:bg-white/[0.03]">
                 {weekDays.map((day) => (
-                  <div key={day} className="border-r border-gray-200 px-2 py-3 text-center text-xs font-semibold text-gray-500 last:border-r-0 dark:border-gray-800 sm:px-4">
+                  <div key={day} className="border-r border-gray-200 px-2 py-2 text-center text-xs font-semibold text-gray-500 last:border-r-0 dark:border-gray-800 sm:px-3">
                     {day}
                   </div>
                 ))}
               </div>
 
-              <div className="grid grid-cols-[repeat(7,minmax(0,1fr))]">
+              <div className="grid auto-rows-[76px] grid-cols-[repeat(7,minmax(0,1fr))] sm:auto-rows-[86px] xl:auto-rows-[90px]">
                 {visibleDays.map((day) => {
                   const iso = toIsoDate(day);
                   const isCurrentMonth = day.getMonth() === currentMonth.getMonth();
@@ -379,57 +325,45 @@ export default function ResrvaCalendar() {
                   const stats = statsByDate.get(iso) || { bookings: [], guests: 0, load: 0 };
                   const style = loadStyle(stats.load);
                   const barWidth = `${Math.min(stats.load, 100)}%`;
-                  const eventChips = Array.from(
-                    new Set(
-                      stats.bookings
-                        .filter((booking) => booking.booking_type === "function")
-                        .map((booking) => booking.event_type || "Function"),
-                    ),
-                  ).slice(0, 2);
+                  const hasFunction = stats.bookings.some((booking) => booking.booking_type === "function");
 
                   return (
                     <button
                       key={iso}
                       type="button"
-                      onClick={() => setSelectedDate(iso)}
-                      className={`min-h-[104px] min-w-0 border-b border-r border-gray-200 p-2 text-left transition last:border-r-0 dark:border-gray-800 sm:min-h-[132px] sm:p-4 ${
+                      onClick={() => openDateDetails(iso)}
+                      className={`h-full min-w-0 overflow-hidden border-b border-r border-gray-200 p-2 text-left transition last:border-r-0 dark:border-gray-800 sm:p-2.5 ${
                         isSelected
                           ? "bg-brand-50/70 ring-2 ring-inset ring-brand-500 dark:bg-brand-500/10"
                           : "bg-white hover:bg-gray-50 dark:bg-transparent dark:hover:bg-white/[0.04]"
                       } ${!isCurrentMonth ? "text-gray-400" : "text-gray-900 dark:text-white/90"}`}
                     >
-                      <div className="text-sm font-semibold">{day.getDate()}</div>
+                      <div className="flex min-w-0 items-start justify-between gap-2">
+                        <div className="shrink-0 text-sm font-semibold">{day.getDate()}</div>
+                        {hasFunction ? (
+                          <span
+                            className="max-w-[calc(100%-2rem)] truncate rounded-md bg-blue-light-50 px-1.5 py-0.5 text-[10px] font-semibold text-blue-light-500 dark:bg-blue-light-500/15 dark:text-blue-light-500"
+                            title="Function"
+                          >
+                            Function
+                          </span>
+                        ) : null}
+                      </div>
 
                       {stats.bookings.length ? (
-                        <div className="mt-3">
-                          <p className="text-xs font-medium text-gray-700 dark:text-gray-300">
-                            <span>{stats.bookings.length}</span>{" "}
-                            <span className="hidden sm:inline">
-                              {stats.bookings.length === 1 ? "booking" : "bookings"}
-                            </span>
+                        <div className="mt-2">
+                          <p className="truncate text-[11px] font-medium text-gray-700 dark:text-gray-300 sm:text-xs">
+                            {pluralize(stats.bookings.length, "booking")} · {pluralize(stats.guests, "guest")}
                           </p>
-                          <p className="mt-0.5 text-xs font-semibold text-gray-600 dark:text-gray-400">
+                          <p className="text-[11px] font-semibold text-gray-600 dark:text-gray-400 sm:text-xs">
                             {stats.load}%
                           </p>
-                          <div className="mt-2 h-1.5 rounded-full bg-gray-100 dark:bg-gray-800">
+                          <div className="mt-1.5 h-1.5 rounded-full bg-gray-100 dark:bg-gray-800">
                             <div className={`h-1.5 rounded-full ${style.bar}`} style={{ width: barWidth }} />
                           </div>
-
-                          {eventChips.length ? (
-                            <div className="mt-3 flex flex-wrap gap-1.5">
-                              {eventChips.map((chip) => (
-                                <span
-                                  key={chip}
-                                  className="max-w-full truncate rounded-md bg-gray-100 px-2 py-1 text-[11px] font-semibold text-gray-700 dark:bg-gray-800 dark:text-gray-300"
-                                >
-                                  {chip}
-                                </span>
-                              ))}
-                            </div>
-                          ) : null}
                         </div>
                       ) : (
-                        <div className="mt-4 h-1.5 w-full max-w-20 rounded-full bg-gray-100 dark:bg-gray-800" />
+                        <div className="mt-3 h-1.5 w-full max-w-16 rounded-full bg-gray-100 dark:bg-gray-800" />
                       )}
                     </button>
                   );
@@ -437,68 +371,64 @@ export default function ResrvaCalendar() {
               </div>
             </div>
           </div>
-
-          <button
-            type="button"
-            className="group hidden cursor-col-resize border-l border-r border-gray-200 bg-gray-50 transition hover:bg-brand-50 dark:border-gray-800 dark:bg-white/[0.03] dark:hover:bg-brand-500/10 xl:flex xl:items-center xl:justify-center"
-            onPointerDown={startResize}
-            aria-label="Resize calendar and booking list"
-          >
-            <span className="h-12 w-1 rounded-full bg-gray-300 transition group-hover:bg-brand-500 dark:bg-gray-700" />
-          </button>
-
-          <aside className="border-t border-gray-200 bg-white p-5 dark:border-gray-800 dark:bg-transparent xl:border-t-0">
-            <div className="flex items-start justify-between gap-4">
-              <div>
-                <p className="text-base font-semibold text-gray-900 dark:text-white/90">{displayDate(selectedDate)}</p>
-                <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
-                  {selectedBookings.length} {selectedBookings.length === 1 ? "booking" : "bookings"}
-                </p>
-              </div>
-              <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${loadStyle(statsByDate.get(selectedDate)?.load || 0).chip}`}>
-                {statsByDate.get(selectedDate)?.load || 0}%
-              </span>
-            </div>
-
-            <div className="mt-5 max-h-[720px] overflow-y-auto rounded-xl border border-gray-200 dark:border-gray-800">
-              {selectedBookings.length === 0 ? (
-                <div className="p-6 text-center text-sm font-medium text-gray-500">
-                  No bookings for this date.
-                </div>
-              ) : (
-                selectedBookings
-                  .slice()
-                  .sort((left, right) => left.start_time.localeCompare(right.start_time))
-                  .map((booking) => (
-                    <article
-                      key={booking.id}
-                      className="grid min-h-14 grid-cols-[76px_minmax(0,1fr)_92px] items-start gap-3 border-b border-gray-100 px-3 py-2.5 text-sm last:border-b-0 dark:border-gray-800"
-                    >
-                      <p className="whitespace-nowrap pt-0.5 font-semibold text-gray-900 dark:text-white/90">
-                        {displayTime(booking.start_time)}
-                      </p>
-                      <div className="min-w-0">
-                        <p className="truncate font-semibold text-gray-800 dark:text-gray-200">{booking.customer_name}</p>
-                        <p className="mt-0.5 flex min-w-0 items-center gap-2 text-xs text-gray-500 dark:text-gray-400">
-                          <span className="inline-flex items-center gap-1 whitespace-nowrap">
-                            <Users className="size-3.5" />
-                            {booking.guest_count}
-                          </span>
-                          <span className="truncate">
-                            {bookingEventLabel(booking)} · {bookingAreaLabel(booking)}
-                          </span>
-                        </p>
-                      </div>
-                      <div className="flex justify-end pt-0.5">
-                        <StatusBadge status={booking.status} />
-                      </div>
-                    </article>
-                  ))
-              )}
-            </div>
-          </aside>
         </div>
       </section>
+
+      <Modal isOpen={detailsOpen} onClose={() => setDetailsOpen(false)} className="m-4 max-w-[900px]">
+        <div className="p-5 sm:p-6">
+          <div className="pr-12">
+            <p className="text-lg font-semibold text-gray-900 dark:text-white/90">
+              {displayDate(selectedDate)}
+            </p>
+            <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
+              {pluralize(selectedBookings.length, "booking")} · {pluralize(selectedGuestCount, "guest")}
+            </p>
+          </div>
+
+          <div className="mt-5 max-h-[68vh] overflow-y-auto rounded-xl border border-gray-200 dark:border-gray-800">
+            {selectedBookings.length === 0 ? (
+              <div className="p-8 text-center text-sm font-medium text-gray-500 dark:text-gray-400">
+                No bookings for this date.
+              </div>
+            ) : (
+              selectedBookings.map((booking) => (
+                <article
+                  key={booking.id}
+                  className="grid gap-3 border-b border-gray-100 px-4 py-3 last:border-b-0 dark:border-gray-800 sm:grid-cols-[86px_minmax(0,1fr)_96px]"
+                >
+                  <p className="whitespace-nowrap text-sm font-semibold text-gray-900 dark:text-white/90">
+                    {displayTime(booking.start_time)}
+                  </p>
+                  <div className="min-w-0">
+                    <div className="flex min-w-0 flex-wrap items-center gap-2">
+                      <p className="truncate text-sm font-semibold text-gray-800 dark:text-gray-200">
+                        {booking.customer_name}
+                      </p>
+                      {booking.booking_type === "function" ? (
+                        <span className="rounded-md bg-blue-light-50 px-1.5 py-0.5 text-[10px] font-semibold text-blue-light-500 dark:bg-blue-light-500/15 dark:text-blue-light-500">
+                          Function
+                        </span>
+                      ) : null}
+                    </div>
+                    <p className="mt-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-gray-500 dark:text-gray-400">
+                      <span className="inline-flex items-center gap-1 whitespace-nowrap">
+                        <Users className="size-3.5" />
+                        {pluralize(Number(booking.guest_count || 0), "guest")}
+                      </span>
+                      <span className="truncate">
+                        {bookingEventLabel(booking)} · {bookingAreaLabel(booking)}
+                      </span>
+                    </p>
+                  </div>
+                  <div className="flex items-start sm:justify-end">
+                    <StatusBadge status={booking.status} />
+                  </div>
+                </article>
+              ))
+            )}
+          </div>
+        </div>
+      </Modal>
     </>
   );
 }

@@ -1342,6 +1342,70 @@ function scalar_query(string $sql, array $params): int
     return (int) $stmt->fetchColumn();
 }
 
+function area_code_from_name(string $name): string
+{
+    $code = strtoupper((string) preg_replace('/[^A-Za-z0-9]+/', '_', $name));
+    $code = trim($code, '_');
+    $code = substr($code !== '' ? $code : 'AREA', 0, 20);
+    $base = $code;
+    $suffix = 2;
+
+    while (scalar_query('SELECT COUNT(*) FROM areas WHERE code = ?', [$code]) > 0) {
+        $suffixText = '_' . $suffix;
+        $code = substr($base, 0, 20 - strlen($suffixText)) . $suffixText;
+        $suffix++;
+    }
+
+    return $code;
+}
+
+function ensure_area_exists(int $areaId): void
+{
+    if ($areaId <= 0 || scalar_query('SELECT COUNT(*) FROM areas WHERE id = ?', [$areaId]) === 0) {
+        fail('Please choose a valid area.', 422, ['area_id' => $areaId]);
+    }
+}
+
+function ensure_table_number_available(int $tableNumber, ?int $excludeId = null): void
+{
+    if ($tableNumber <= 0) {
+        fail('Table number must be greater than zero.', 422, ['table_number' => $tableNumber]);
+    }
+
+    $sql = 'SELECT COUNT(*) FROM venue_tables WHERE table_number = ?';
+    $params = [$tableNumber];
+    if ($excludeId !== null) {
+        $sql .= ' AND id <> ?';
+        $params[] = $excludeId;
+    }
+
+    if (scalar_query($sql, $params) > 0) {
+        fail('That table number already exists.', 409, ['table_number' => $tableNumber]);
+    }
+}
+
+function sync_area_table_range(int $areaId): void
+{
+    if ($areaId <= 0) {
+        return;
+    }
+
+    $stmt = db()->prepare(
+        'SELECT COALESCE(MIN(table_number), 0) AS table_start, COALESCE(MAX(table_number), 0) AS table_end
+         FROM venue_tables
+         WHERE area_id = :area_id'
+    );
+    $stmt->execute(['area_id' => $areaId]);
+    $range = $stmt->fetch() ?: ['table_start' => 0, 'table_end' => 0];
+
+    $update = db()->prepare('UPDATE areas SET table_start = :table_start, table_end = :table_end WHERE id = :id');
+    $update->execute([
+        'table_start' => (int) $range['table_start'],
+        'table_end' => (int) $range['table_end'],
+        'id' => $areaId,
+    ]);
+}
+
 try {
     $method = $_SERVER['REQUEST_METHOD'];
     $route = trim((string) ($_GET['r'] ?? 'meta'), '/');
@@ -1462,16 +1526,164 @@ try {
         respond(['areas' => $areas, 'tables' => $tables]);
     }
 
+    if ($method === 'POST' && $route === 'tables') {
+        $manager = require_manager();
+        $data = json_body();
+        $areaId = (int) ($data['area_id'] ?? 0);
+        $tableNumber = (int) ($data['table_number'] ?? 0);
+
+        ensure_area_exists($areaId);
+        ensure_table_number_available($tableNumber);
+
+        $stmt = db()->prepare(
+            'INSERT INTO venue_tables (area_id, table_number, capacity, active, created_at, updated_at)
+             VALUES (:area_id, :table_number, :capacity, :active, NOW(), NOW())'
+        );
+        $stmt->execute([
+            'area_id' => $areaId,
+            'table_number' => $tableNumber,
+            'capacity' => max((int) ($data['capacity'] ?? 8), 1),
+            'active' => bool_int($data['active'] ?? true),
+        ]);
+        $tableId = (int) db()->lastInsertId();
+        sync_area_table_range($areaId);
+        log_activity((int) $manager['id'], 'created', 'table', $tableId);
+        respond(['ok' => true, 'id' => $tableId], 201);
+    }
+
     if (($segments[0] ?? '') === 'tables' && isset($segments[1]) && $method === 'PUT') {
         $manager = require_manager();
         $data = json_body();
-        $stmt = db()->prepare('UPDATE venue_tables SET capacity = :capacity, active = :active, updated_at = NOW() WHERE id = :id');
+        $tableId = (int) $segments[1];
+        $existingStmt = db()->prepare('SELECT * FROM venue_tables WHERE id = :id');
+        $existingStmt->execute(['id' => $tableId]);
+        $existing = $existingStmt->fetch();
+        if (!$existing) {
+            fail('Table not found.', 404);
+        }
+
+        $areaId = array_key_exists('area_id', $data) ? (int) $data['area_id'] : (int) $existing['area_id'];
+        $tableNumber = array_key_exists('table_number', $data) ? (int) $data['table_number'] : (int) $existing['table_number'];
+        ensure_area_exists($areaId);
+        ensure_table_number_available($tableNumber, $tableId);
+
+        $stmt = db()->prepare(
+            'UPDATE venue_tables
+             SET area_id = :area_id, table_number = :table_number, capacity = :capacity, active = :active, updated_at = NOW()
+             WHERE id = :id'
+        );
         $stmt->execute([
+            'area_id' => $areaId,
+            'table_number' => $tableNumber,
             'capacity' => max((int) ($data['capacity'] ?? 8), 1),
             'active' => bool_int($data['active'] ?? true),
-            'id' => (int) $segments[1],
+            'id' => $tableId,
         ]);
-        log_activity((int) $manager['id'], 'updated', 'table', (int) $segments[1]);
+        sync_area_table_range((int) $existing['area_id']);
+        sync_area_table_range($areaId);
+        log_activity((int) $manager['id'], 'updated', 'table', $tableId);
+        respond(['ok' => true]);
+    }
+
+    if (($segments[0] ?? '') === 'tables' && isset($segments[1]) && $method === 'DELETE') {
+        $manager = require_manager();
+        $tableId = (int) $segments[1];
+        $stmt = db()->prepare('SELECT area_id FROM venue_tables WHERE id = :id');
+        $stmt->execute(['id' => $tableId]);
+        $table = $stmt->fetch();
+        if (!$table) {
+            fail('Table not found.', 404);
+        }
+
+        if (scalar_query('SELECT COUNT(*) FROM booking_tables WHERE table_id = ?', [$tableId]) > 0) {
+            fail('This table is used by existing bookings. Mark it inactive instead.', 409);
+        }
+
+        db()->prepare('DELETE FROM venue_tables WHERE id = :id')->execute(['id' => $tableId]);
+        sync_area_table_range((int) $table['area_id']);
+        log_activity((int) $manager['id'], 'deleted', 'table', $tableId);
+        respond(['ok' => true]);
+    }
+
+    if ($method === 'POST' && $route === 'areas') {
+        $manager = require_manager();
+        $data = json_body();
+        $name = clean_string($data['name'] ?? '');
+        if ($name === '') {
+            fail('Area name is required.', 422);
+        }
+        $code = clean_string($data['code'] ?? '');
+        $code = $code !== '' ? strtoupper(substr((string) preg_replace('/[^A-Za-z0-9_]+/', '_', $code), 0, 20)) : area_code_from_name($name);
+        if (scalar_query('SELECT COUNT(*) FROM areas WHERE code = ?', [$code]) > 0) {
+            fail('That area code already exists.', 409, ['code' => $code]);
+        }
+
+        $sortOrder = array_key_exists('sort_order', $data)
+            ? (int) $data['sort_order']
+            : scalar_query('SELECT COALESCE(MAX(sort_order), 0) + 10 FROM areas', []);
+        $stmt = db()->prepare(
+            'INSERT INTO areas (code, name, table_start, table_end, function_enabled, active, sort_order)
+             VALUES (:code, :name, 0, 0, :function_enabled, 1, :sort_order)'
+        );
+        $stmt->execute([
+            'code' => $code,
+            'name' => $name,
+            'function_enabled' => bool_int($data['function_enabled'] ?? false),
+            'sort_order' => $sortOrder,
+        ]);
+        $areaId = (int) db()->lastInsertId();
+        log_activity((int) $manager['id'], 'created', 'area', $areaId);
+        respond(['ok' => true, 'id' => $areaId], 201);
+    }
+
+    if (($segments[0] ?? '') === 'areas' && isset($segments[1]) && $method === 'PUT') {
+        $manager = require_manager();
+        $areaId = (int) $segments[1];
+        ensure_area_exists($areaId);
+        $data = json_body();
+        $name = clean_string($data['name'] ?? '');
+        if ($name === '') {
+            fail('Area name is required.', 422);
+        }
+        $code = strtoupper(substr((string) preg_replace('/[^A-Za-z0-9_]+/', '_', clean_string($data['code'] ?? '')), 0, 20));
+        if ($code === '') {
+            fail('Area code is required.', 422);
+        }
+        if (scalar_query('SELECT COUNT(*) FROM areas WHERE code = ? AND id <> ?', [$code, $areaId]) > 0) {
+            fail('That area code already exists.', 409, ['code' => $code]);
+        }
+
+        $stmt = db()->prepare(
+            'UPDATE areas
+             SET code = :code, name = :name, function_enabled = :function_enabled, sort_order = :sort_order
+             WHERE id = :id'
+        );
+        $stmt->execute([
+            'code' => $code,
+            'name' => $name,
+            'function_enabled' => bool_int($data['function_enabled'] ?? false),
+            'sort_order' => (int) ($data['sort_order'] ?? 0),
+            'id' => $areaId,
+        ]);
+        log_activity((int) $manager['id'], 'updated', 'area', $areaId);
+        respond(['ok' => true]);
+    }
+
+    if (($segments[0] ?? '') === 'areas' && isset($segments[1]) && $method === 'DELETE') {
+        $manager = require_manager();
+        $areaId = (int) $segments[1];
+        ensure_area_exists($areaId);
+        if (scalar_query('SELECT COUNT(*) FROM venue_tables WHERE area_id = ?', [$areaId]) > 0) {
+            fail('Move or delete this area’s tables before removing the area.', 409);
+        }
+
+        try {
+            db()->prepare('DELETE FROM areas WHERE id = :id')->execute(['id' => $areaId]);
+        } catch (PDOException) {
+            db()->prepare('UPDATE areas SET active = 0 WHERE id = :id')->execute(['id' => $areaId]);
+        }
+
+        log_activity((int) $manager['id'], 'deleted', 'area', $areaId);
         respond(['ok' => true]);
     }
 
