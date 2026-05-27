@@ -105,6 +105,28 @@ function bool_int(mixed $value): int
     return filter_var($value, FILTER_VALIDATE_BOOLEAN) ? 1 : 0;
 }
 
+function normalized_table_ids(mixed $value): array
+{
+    if (!is_array($value)) {
+        return [];
+    }
+
+    $ids = [];
+    foreach ($value as $tableId) {
+        $id = (int) $tableId;
+        if ($id > 0) {
+            $ids[] = $id;
+        }
+    }
+
+    return array_values(array_unique($ids));
+}
+
+function normalized_area_ids(mixed $value): array
+{
+    return normalized_table_ids($value);
+}
+
 function require_fields(array $data, array $fields): void
 {
     $missing = [];
@@ -300,45 +322,109 @@ function create_email_log(int $bookingId, string $email, string $subject, string
     ]);
 }
 
-function overlapping_table_ids(string $date, string $startTime, string $endTime): array
+function email_display_date(string $date): string
 {
-    $stmt = db()->prepare(
+    $timestamp = strtotime($date);
+
+    return $timestamp ? date('D, j M Y', $timestamp) : $date;
+}
+
+function email_display_time(string $time): string
+{
+    $timestamp = strtotime($time);
+
+    return $timestamp ? date('g:i A', $timestamp) : substr($time, 0, 5);
+}
+
+function create_function_confirmation_email(array $booking, string $managerMessage = ''): void
+{
+    $status = (string) ($booking['status'] ?? 'confirmed');
+    $statusLabel = $status === 'approved' ? 'approved' : 'confirmed';
+    $name = (string) ($booking['customer_name'] ?? 'there');
+    $reference = (string) ($booking['booking_reference'] ?? '');
+    $areas = (string) ($booking['assigned_area_names'] ?? $booking['assigned_area_name'] ?? 'to be confirmed');
+    $eventType = (string) ($booking['event_type'] ?? 'function');
+    $date = email_display_date((string) ($booking['booking_date'] ?? ''));
+    $startTime = email_display_time((string) ($booking['start_time'] ?? ''));
+    $endTime = email_display_time((string) ($booking['end_time'] ?? ''));
+    $guestCount = (int) ($booking['guest_count'] ?? 0);
+
+    $body = "Hi {$name}, your {$eventType} function booking at Old Canberra Inn is {$statusLabel}. " .
+        "Reference: {$reference}. Date: {$date}. Time: {$startTime} - {$endTime}. " .
+        "Guests: {$guestCount}. Area(s): {$areas}.";
+
+    if ($managerMessage !== '') {
+        $body .= "\n\nMessage from the manager: {$managerMessage}";
+    }
+
+    create_email_log(
+        (int) $booking['id'],
+        (string) $booking['customer_email'],
+        "Old Canberra Inn function booking {$reference} {$statusLabel}",
+        $body
+    );
+}
+
+function overlapping_table_ids(string $date, string $startTime, string $endTime, ?int $excludeBookingId = null): array
+{
+    $sql =
         'SELECT DISTINCT bt.table_id
          FROM booking_tables bt
          JOIN bookings b ON b.id = bt.booking_id
          WHERE b.booking_date = :booking_date
            AND b.status NOT IN ("cancelled", "no_show", "declined")
            AND b.start_time < :end_time
-           AND b.end_time > :start_time'
-    );
-    $stmt->execute([
+           AND b.end_time > :start_time';
+    $params = [
         'booking_date' => $date,
         'start_time' => $startTime,
         'end_time' => $endTime,
-    ]);
+    ];
+
+    if ($excludeBookingId !== null) {
+        $sql .= ' AND b.id <> :exclude_booking_id';
+        $params['exclude_booking_id'] = $excludeBookingId;
+    }
+
+    $stmt = db()->prepare($sql);
+    $stmt->execute($params);
 
     return array_map('intval', array_column($stmt->fetchAll(), 'table_id'));
 }
 
-function blocked_function_area_ids(string $date, string $startTime, string $endTime): array
+function blocked_function_area_ids(string $date, string $startTime, string $endTime, ?int $excludeBookingId = null): array
 {
-    $stmt = db()->prepare(
-        'SELECT DISTINCT assigned_area_id
-         FROM bookings
+    $sql =
+        'SELECT DISTINCT area_id
+         FROM (
+            SELECT b.assigned_area_id AS area_id, b.id, b.booking_type, b.status, b.booking_date, b.start_time, b.end_time
+            FROM bookings b
+            WHERE b.assigned_area_id IS NOT NULL
+            UNION ALL
+            SELECT bfa.area_id AS area_id, b.id, b.booking_type, b.status, b.booking_date, b.start_time, b.end_time
+            FROM booking_function_areas bfa
+            JOIN bookings b ON b.id = bfa.booking_id
+         ) function_areas
          WHERE booking_type = "function"
-           AND assigned_area_id IS NOT NULL
            AND status IN ("approved", "confirmed")
            AND booking_date = :booking_date
            AND start_time < :end_time
-           AND end_time > :start_time'
-    );
-    $stmt->execute([
+           AND end_time > :start_time';
+    $params = [
         'booking_date' => $date,
         'start_time' => $startTime,
         'end_time' => $endTime,
-    ]);
+    ];
 
-    return array_map('intval', array_column($stmt->fetchAll(), 'assigned_area_id'));
+    if ($excludeBookingId !== null) {
+        $sql .= ' AND id <> :exclude_booking_id';
+        $params['exclude_booking_id'] = $excludeBookingId;
+    }
+
+    $stmt = db()->prepare($sql);
+    $stmt->execute($params);
+
+    return array_map('intval', array_column($stmt->fetchAll(), 'area_id'));
 }
 
 function active_areas(bool $functionOnly = false): array
@@ -404,10 +490,10 @@ function choose_tables_from_area(array $tables, int $guestCount, array $unavaila
     return [];
 }
 
-function recommend_tables(int $guestCount, string $date, string $startTime, string $endTime, ?int $preferredAreaId): array
+function recommend_tables(int $guestCount, string $date, string $startTime, string $endTime, ?int $preferredAreaId, ?int $excludeBookingId = null): array
 {
-    $unavailableIds = overlapping_table_ids($date, $startTime, $endTime);
-    $blockedAreaIds = blocked_function_area_ids($date, $startTime, $endTime);
+    $unavailableIds = overlapping_table_ids($date, $startTime, $endTime, $excludeBookingId);
+    $blockedAreaIds = blocked_function_area_ids($date, $startTime, $endTime, $excludeBookingId);
     $areas = active_areas(false);
 
     usort($areas, function (array $left, array $right) use ($preferredAreaId): int {
@@ -452,6 +538,71 @@ function recommend_tables(int $guestCount, string $date, string $startTime, stri
     fail('No suitable tables are available for that booking window.', 409);
 }
 
+function manual_table_assignment(array $tableIds, int $guestCount, string $date, string $startTime, string $endTime, ?int $excludeBookingId = null): array
+{
+    $tableIds = normalized_table_ids($tableIds);
+    if ($tableIds === []) {
+        fail('Please select at least one table.', 422);
+    }
+
+    $placeholders = implode(',', array_fill(0, count($tableIds), '?'));
+    $stmt = db()->prepare(
+        "SELECT vt.id, vt.table_number, vt.capacity, vt.area_id, a.name AS area_name
+         FROM venue_tables vt
+         JOIN areas a ON a.id = vt.area_id
+         WHERE vt.active = 1
+           AND vt.id IN ({$placeholders})
+         ORDER BY vt.table_number"
+    );
+    $stmt->execute($tableIds);
+    $tables = $stmt->fetchAll();
+
+    if (count($tables) !== count($tableIds)) {
+        fail('One or more selected tables are unavailable.', 422);
+    }
+
+    $areaIds = array_values(array_unique(array_map(fn (array $table) => (int) $table['area_id'], $tables)));
+    if (count($areaIds) !== 1) {
+        fail('Selected tables must be in one area.', 422);
+    }
+
+    $areaId = $areaIds[0];
+    if (in_array($areaId, blocked_function_area_ids($date, $startTime, $endTime, $excludeBookingId), true)) {
+        fail('That area is blocked by a function during the selected time.', 409);
+    }
+
+    $unavailableIds = overlapping_table_ids($date, $startTime, $endTime, $excludeBookingId);
+    $clashingIds = array_values(array_intersect($tableIds, $unavailableIds));
+    if ($clashingIds !== []) {
+        fail('One or more selected tables are already booked for that time.', 409, ['table_ids' => $clashingIds]);
+    }
+
+    $capacity = array_sum(array_map(fn (array $table) => (int) $table['capacity'], $tables));
+    if ($capacity < $guestCount) {
+        fail('Selected table capacity does not cover this party size.', 422, [
+            'guest_count' => $guestCount,
+            'selected_capacity' => $capacity,
+        ]);
+    }
+
+    $numbers = array_map(fn (array $table) => (int) $table['table_number'], $tables);
+    $areaName = (string) $tables[0]['area_name'];
+
+    return [
+        'area_id' => $areaId,
+        'area_name' => $areaName,
+        'table_ids' => $tableIds,
+        'table_numbers' => $numbers,
+        'capacity' => $capacity,
+        'explanation' => 'Manager selected ' . $areaName . ' table(s) ' . implode(', ', $numbers) . '.',
+        'rules_snapshot' => [
+            'guest_count' => $guestCount,
+            'duration_minutes' => (int) setting('default_duration_minutes', '120'),
+            'strategy' => 'Manager manual table assignment.',
+        ],
+    ];
+}
+
 function attach_tables_to_booking(int $bookingId, array $tableIds): void
 {
     db()->prepare('DELETE FROM booking_tables WHERE booking_id = :booking_id')->execute(['booking_id' => $bookingId]);
@@ -460,6 +611,56 @@ function attach_tables_to_booking(int $bookingId, array $tableIds): void
     foreach ($tableIds as $tableId) {
         $insert->execute(['booking_id' => $bookingId, 'table_id' => (int) $tableId]);
     }
+}
+
+function attach_function_areas_to_booking(int $bookingId, array $areaIds): void
+{
+    $areaIds = normalized_area_ids($areaIds);
+    db()->prepare('DELETE FROM booking_function_areas WHERE booking_id = :booking_id')->execute(['booking_id' => $bookingId]);
+
+    if ($areaIds === []) {
+        return;
+    }
+
+    $placeholders = implode(',', array_fill(0, count($areaIds), '?'));
+    $stmt = db()->prepare("SELECT id FROM areas WHERE active = 1 AND function_enabled = 1 AND id IN ({$placeholders})");
+    $stmt->execute($areaIds);
+    $validIds = array_map('intval', array_column($stmt->fetchAll(), 'id'));
+
+    if (count($validIds) !== count($areaIds)) {
+        fail('One or more selected function areas are unavailable.', 422);
+    }
+
+    $insert = db()->prepare('INSERT INTO booking_function_areas (booking_id, area_id) VALUES (:booking_id, :area_id)');
+    foreach ($areaIds as $areaId) {
+        $insert->execute(['booking_id' => $bookingId, 'area_id' => $areaId]);
+    }
+}
+
+function validate_function_area_assignment(array $areaIds, string $date, string $startTime, string $endTime, ?int $excludeBookingId = null): void
+{
+    $areaIds = normalized_area_ids($areaIds);
+
+    if ($areaIds === []) {
+        fail('Please select at least one function area.', 422);
+    }
+
+    $blockedAreaIds = blocked_function_area_ids($date, $startTime, $endTime, $excludeBookingId);
+    $clashingAreaIds = array_values(array_intersect($areaIds, $blockedAreaIds));
+
+    if ($clashingAreaIds === []) {
+        return;
+    }
+
+    $placeholders = implode(',', array_fill(0, count($clashingAreaIds), '?'));
+    $stmt = db()->prepare("SELECT name FROM areas WHERE id IN ({$placeholders}) ORDER BY sort_order, id");
+    $stmt->execute($clashingAreaIds);
+    $areaNames = array_column($stmt->fetchAll(), 'name');
+
+    fail('One or more selected function areas already have an approved function at that time.', 409, [
+        'area_ids' => $clashingAreaIds,
+        'areas' => $areaNames,
+    ]);
 }
 
 function log_ai_assignment(int $bookingId, array $recommendation, ?int $acceptedByUserId, bool $overridden = false): void
@@ -495,7 +696,8 @@ function create_table_booking(array $data, ?array $manager = null): array
     $date = clean_string($data['date']);
     $time = clean_string($data['time']);
     $notes = clean_string($data['notes'] ?? '');
-    $preferredAreaId = nullable_int($data['preferred_area_id'] ?? null);
+    $staffNotes = $manager ? clean_string($data['staff_notes'] ?? '') : '';
+    $preferredAreaId = $manager ? null : nullable_int($data['preferred_area_id'] ?? null);
     $durationMinutes = (int) setting('default_duration_minutes', '120');
     $minGuests = (int) setting('min_table_guests', '8');
     $maxGuests = (int) setting('max_table_guests', '29');
@@ -512,17 +714,19 @@ function create_table_booking(array $data, ?array $manager = null): array
     }
 
     [$startTime, $endTime] = validate_booking_window($date, $time, $durationMinutes);
-    $recommendation = recommend_tables($guestCount, $date, $startTime, $endTime, $preferredAreaId);
+    $recommendation = $manager
+        ? manual_table_assignment(normalized_table_ids($data['table_ids'] ?? []), $guestCount, $date, $startTime, $endTime)
+        : recommend_tables($guestCount, $date, $startTime, $endTime, $preferredAreaId);
     $customerId = find_or_create_customer(['name' => $name, 'email' => $email, 'phone' => $phone]);
     $reference = booking_reference();
 
     $stmt = db()->prepare(
         'INSERT INTO bookings
             (booking_reference, booking_type, status, customer_id, guest_count, booking_date, start_time, end_time,
-             preferred_area_id, assigned_area_id, notes, created_by_user_id, updated_by_user_id, created_at, updated_at)
+             preferred_area_id, assigned_area_id, notes, staff_notes, created_by_user_id, updated_by_user_id, created_at, updated_at)
          VALUES
             (:reference, "table", "confirmed", :customer_id, :guest_count, :booking_date, :start_time, :end_time,
-             :preferred_area_id, :assigned_area_id, :notes, :created_by_user_id, :updated_by_user_id, NOW(), NOW())'
+             :preferred_area_id, :assigned_area_id, :notes, :staff_notes, :created_by_user_id, :updated_by_user_id, NOW(), NOW())'
     );
     $stmt->execute([
         'reference' => $reference,
@@ -534,13 +738,14 @@ function create_table_booking(array $data, ?array $manager = null): array
         'preferred_area_id' => $preferredAreaId,
         'assigned_area_id' => $recommendation['area_id'],
         'notes' => $notes,
+        'staff_notes' => $staffNotes,
         'created_by_user_id' => $manager['id'] ?? null,
         'updated_by_user_id' => $manager['id'] ?? null,
     ]);
 
     $bookingId = (int) db()->lastInsertId();
     attach_tables_to_booking($bookingId, $recommendation['table_ids']);
-    log_ai_assignment($bookingId, $recommendation, $manager['id'] ?? null, false);
+    log_ai_assignment($bookingId, $recommendation, $manager['id'] ?? null, $manager !== null);
 
     $subject = "Old Canberra Inn booking {$reference} confirmed";
     $body = "Hi {$name}, your table booking for {$guestCount} guests on {$date} at {$startTime} is confirmed. " .
@@ -621,33 +826,145 @@ function create_function_request(array $data): array
     ];
 }
 
-function booking_select_sql(string $type): string
+function create_manager_function_booking(array $data, array $manager): array
 {
+    require_fields($data, ['name', 'email', 'phone', 'date', 'time', 'guest_count', 'event_type']);
+
+    $allowedStatuses = ['pending', 'approved', 'confirmed', 'declined', 'cancelled'];
+    $name = clean_string($data['name']);
+    $email = strtolower(clean_string($data['email']));
+    $phone = clean_string($data['phone']);
+    $guestCount = (int) $data['guest_count'];
+    $date = clean_string($data['date']);
+    $time = clean_string($data['time']);
+    $eventType = clean_string($data['event_type']);
+    $notes = clean_string($data['notes'] ?? '');
+    $staffNotes = clean_string($data['staff_notes'] ?? '');
+    $managerMessage = clean_string($data['manager_message'] ?? '');
+    $status = clean_string($data['status'] ?? 'pending');
+    $assignedAreaIds = normalized_area_ids($data['assigned_area_ids'] ?? []);
+    $assignedAreaId = $assignedAreaIds[0] ?? null;
+    $durationMinutes = max((int) ($data['duration_minutes'] ?? 180), 120);
+
+    validate_email_address($email);
+    validate_phone_number($phone);
+
+    if ($guestCount < 8) {
+        fail('Function bookings must be for at least 8 guests.', 422);
+    }
+
+    if (!in_array($status, $allowedStatuses, true)) {
+        fail('Unsupported function status.', 422, ['status' => $status]);
+    }
+
+    [$startTime, $endTime] = validate_booking_window($date, $time, $durationMinutes);
+
+    if (in_array($status, ['approved', 'confirmed'], true)) {
+        validate_function_area_assignment($assignedAreaIds, $date, $startTime, $endTime);
+    }
+
+    $customerId = find_or_create_customer(['name' => $name, 'email' => $email, 'phone' => $phone]);
+    $reference = booking_reference();
+
+    $stmt = db()->prepare(
+        'INSERT INTO bookings
+            (booking_reference, booking_type, status, customer_id, guest_count, booking_date, start_time, end_time,
+             assigned_area_id, notes, staff_notes, event_type, manager_message, created_by_user_id, updated_by_user_id,
+             created_at, updated_at)
+         VALUES
+            (:reference, "function", :status, :customer_id, :guest_count, :booking_date, :start_time, :end_time,
+             :assigned_area_id, :notes, :staff_notes, :event_type, :manager_message, :created_by_user_id,
+             :updated_by_user_id, NOW(), NOW())'
+    );
+    $stmt->execute([
+        'reference' => $reference,
+        'status' => $status,
+        'customer_id' => $customerId,
+        'guest_count' => $guestCount,
+        'booking_date' => $date,
+        'start_time' => $startTime,
+        'end_time' => $endTime,
+        'assigned_area_id' => $assignedAreaId,
+        'notes' => $notes,
+        'staff_notes' => $staffNotes,
+        'event_type' => $eventType,
+        'manager_message' => $managerMessage,
+        'created_by_user_id' => (int) $manager['id'],
+        'updated_by_user_id' => (int) $manager['id'],
+    ]);
+
+    $bookingId = (int) db()->lastInsertId();
+    attach_function_areas_to_booking($bookingId, $assignedAreaIds);
+    $booking = fetch_booking($bookingId);
+
+    if ($booking && in_array($status, ['approved', 'confirmed'], true)) {
+        create_function_confirmation_email($booking, $managerMessage);
+    } else {
+        create_email_log(
+            $bookingId,
+            $email,
+            "Old Canberra Inn function booking {$reference} created",
+            $managerMessage !== ''
+                ? $managerMessage
+                : "Hi {$name}, your function booking for {$guestCount} guests on {$date} at {$startTime} has been created."
+        );
+    }
+    log_activity((int) $manager['id'], 'created', 'function_booking', $bookingId, ['reference' => $reference]);
+
+    return $booking ?: fetch_booking($bookingId);
+}
+
+function booking_select_sql(?string $type): string
+{
+    $typeWhere = $type === null ? 'WHERE 1 = 1' : 'WHERE b.booking_type = :type';
+
     return
         'SELECT b.*, c.name AS customer_name, c.email AS customer_email, c.phone AS customer_phone,
                 preferred.name AS preferred_area_name, assigned.name AS assigned_area_name,
+                (
+                    SELECT GROUP_CONCAT(a.id ORDER BY a.sort_order, a.id SEPARATOR ",")
+                    FROM booking_function_areas bfa
+                    JOIN areas a ON a.id = bfa.area_id
+                    WHERE bfa.booking_id = b.id
+                ) AS assigned_area_ids,
+                (
+                    SELECT GROUP_CONCAT(a.name ORDER BY a.sort_order, a.id SEPARATOR ", ")
+                    FROM booking_function_areas bfa
+                    JOIN areas a ON a.id = bfa.area_id
+                    WHERE bfa.booking_id = b.id
+                ) AS assigned_area_names,
                 (
                     SELECT GROUP_CONCAT(vt.table_number ORDER BY vt.table_number SEPARATOR ", ")
                     FROM booking_tables bt
                     JOIN venue_tables vt ON vt.id = bt.table_id
                     WHERE bt.booking_id = b.id
-                ) AS table_numbers
+                ) AS table_numbers,
+                (
+                    SELECT GROUP_CONCAT(vt.id ORDER BY vt.table_number SEPARATOR ",")
+                    FROM booking_tables bt
+                    JOIN venue_tables vt ON vt.id = bt.table_id
+                    WHERE bt.booking_id = b.id
+                ) AS table_ids
          FROM bookings b
          JOIN customers c ON c.id = b.customer_id
          LEFT JOIN areas preferred ON preferred.id = b.preferred_area_id
          LEFT JOIN areas assigned ON assigned.id = b.assigned_area_id
-         WHERE b.booking_type = "' . $type . '"';
+         ' . $typeWhere;
 }
 
-function list_bookings(string $type): void
+function list_bookings(?string $type): void
 {
     require_manager();
 
     $page = max((int) ($_GET['page'] ?? 1), 1);
-    $perPage = min(max((int) ($_GET['per_page'] ?? 10), 5), 50);
+    $perPage = min(max((int) ($_GET['per_page'] ?? 50), 5), 100);
     $offset = ($page - 1) * $perPage;
     $params = [];
     $where = '';
+
+    if ($type !== null) {
+        $params['type'] = $type;
+    }
 
     if (!empty($_GET['status'])) {
         $where .= ' AND b.status = :status';
@@ -659,6 +976,21 @@ function list_bookings(string $type): void
         $params['booking_date'] = clean_string($_GET['date']);
     }
 
+    if (!empty($_GET['date_from'])) {
+        $where .= ' AND b.booking_date >= :date_from';
+        $params['date_from'] = clean_string($_GET['date_from']);
+    }
+
+    if (!empty($_GET['date_to'])) {
+        $where .= ' AND b.booking_date <= :date_to';
+        $params['date_to'] = clean_string($_GET['date_to']);
+    }
+
+    if (!empty($_GET['type']) && in_array($_GET['type'], ['table', 'function'], true) && $type === null) {
+        $where .= ' AND b.booking_type = :booking_type_filter';
+        $params['booking_type_filter'] = clean_string($_GET['type']);
+    }
+
     if (!empty($_GET['search'])) {
         $where .= ' AND (b.booking_reference LIKE :search OR c.name LIKE :search OR c.email LIKE :search OR c.phone LIKE :search)';
         $params['search'] = '%' . clean_string($_GET['search']) . '%';
@@ -668,12 +1000,12 @@ function list_bookings(string $type): void
         'SELECT COUNT(*)
          FROM bookings b
          JOIN customers c ON c.id = b.customer_id
-         WHERE b.booking_type = :type' . $where
+         ' . ($type === null ? 'WHERE 1 = 1' : 'WHERE b.booking_type = :type') . $where
     );
-    $count->execute(['type' => $type] + $params);
+    $count->execute($params);
     $total = (int) $count->fetchColumn();
 
-    $sql = booking_select_sql($type) . $where . ' ORDER BY b.booking_date DESC, b.start_time DESC LIMIT ' . $perPage . ' OFFSET ' . $offset;
+    $sql = booking_select_sql($type) . $where . ' ORDER BY b.booking_date ASC, b.start_time ASC LIMIT ' . $perPage . ' OFFSET ' . $offset;
     $stmt = db()->prepare($sql);
     $stmt->execute($params);
 
@@ -690,14 +1022,115 @@ function list_bookings(string $type): void
 
 function update_booking(int $bookingId, array $data, array $manager): array
 {
+    $existing = fetch_booking($bookingId);
+    if (!$existing) {
+        fail('Booking not found.', 404);
+    }
+
     $allowedStatuses = ['pending', 'confirmed', 'seated', 'completed', 'cancelled', 'no_show', 'approved', 'declined'];
     $status = clean_string($data['status'] ?? '');
     if ($status !== '' && !in_array($status, $allowedStatuses, true)) {
         fail('Unsupported booking status.', 422, ['status' => $status]);
     }
 
-    $managerMessage = clean_string($data['manager_message'] ?? '');
-    $assignedAreaId = nullable_int($data['assigned_area_id'] ?? null);
+    $managerMessage = array_key_exists('manager_message', $data) ? clean_string($data['manager_message']) : '';
+    $assignedAreaIds = [];
+    if ((string) $existing['booking_type'] === 'function') {
+        $assignedAreaIds = array_key_exists('assigned_area_ids', $data)
+            ? normalized_area_ids($data['assigned_area_ids'])
+            : (
+                array_key_exists('assigned_area_id', $data)
+                    ? array_filter([nullable_int($data['assigned_area_id'])])
+                    : normalized_area_ids(explode(',', (string) ($existing['assigned_area_ids'] ?? $existing['assigned_area_id'] ?? '')))
+            );
+    }
+    $assignedAreaId = array_key_exists('assigned_area_id', $data)
+        ? nullable_int($data['assigned_area_id'])
+        : (array_key_exists('assigned_area_ids', $data) ? ($assignedAreaIds[0] ?? null) : nullable_int($existing['assigned_area_id']));
+    $preferredAreaId = array_key_exists('preferred_area_id', $data)
+        ? nullable_int($data['preferred_area_id'])
+        : nullable_int($existing['preferred_area_id']);
+    $guestCount = array_key_exists('guest_count', $data)
+        ? (int) $data['guest_count']
+        : (int) $existing['guest_count'];
+    $bookingDate = array_key_exists('date', $data)
+        ? clean_string($data['date'])
+        : (string) $existing['booking_date'];
+    $startInput = array_key_exists('time', $data)
+        ? clean_string($data['time'])
+        : substr((string) $existing['start_time'], 0, 5);
+    $durationMinutes = (int) setting('default_duration_minutes', '120');
+
+    if ((string) $existing['booking_type'] === 'function') {
+        $durationMinutes = max((minutes_from_time(substr((string) $existing['end_time'], 0, 5)) - minutes_from_time(substr((string) $existing['start_time'], 0, 5))), 120);
+    }
+
+    [$startTime, $endTime] = validate_booking_window($bookingDate, $startInput, $durationMinutes);
+
+    if ((string) $existing['booking_type'] === 'table') {
+        $minGuests = (int) setting('min_table_guests', '8');
+        $maxGuests = (int) setting('max_table_guests', '29');
+        if ($guestCount < $minGuests || $guestCount > $maxGuests) {
+            fail("Table bookings must be between {$minGuests} and {$maxGuests} guests.", 422);
+        }
+    }
+
+    if (array_key_exists('name', $data) || array_key_exists('email', $data) || array_key_exists('phone', $data)) {
+        $customerName = clean_string($data['name'] ?? $existing['customer_name']);
+        $customerEmail = strtolower(clean_string($data['email'] ?? $existing['customer_email']));
+        $customerPhone = clean_string($data['phone'] ?? $existing['customer_phone']);
+        validate_email_address($customerEmail);
+        validate_phone_number($customerPhone);
+
+        $customerStmt = db()->prepare('UPDATE customers SET name = :name, email = :email, phone = :phone, updated_at = NOW() WHERE id = :id');
+        $customerStmt->execute([
+            'name' => $customerName,
+            'email' => $customerEmail,
+            'phone' => $customerPhone,
+            'id' => (int) $existing['customer_id'],
+        ]);
+    }
+
+    $hasManualTableIds = array_key_exists('table_ids', $data);
+    $manualRecommendation = null;
+    if ((string) $existing['booking_type'] === 'table' && $hasManualTableIds) {
+        $manualRecommendation = manual_table_assignment(
+            normalized_table_ids($data['table_ids']),
+            $guestCount,
+            $bookingDate,
+            $startTime,
+            $endTime,
+            $bookingId
+        );
+        $assignedAreaId = (int) $manualRecommendation['area_id'];
+    }
+
+    $shouldReassign = (string) $existing['booking_type'] === 'table'
+        && !$hasManualTableIds
+        && (
+            $guestCount !== (int) $existing['guest_count']
+            || $bookingDate !== (string) $existing['booking_date']
+            || $startTime !== substr((string) $existing['start_time'], 0, 5)
+            || $preferredAreaId !== nullable_int($existing['preferred_area_id'])
+        );
+
+    $recommendation = null;
+    if ($shouldReassign) {
+        $recommendation = recommend_tables($guestCount, $bookingDate, $startTime, $endTime, $preferredAreaId, $bookingId);
+        $assignedAreaId = (int) $recommendation['area_id'];
+    }
+
+    $nextStatus = $status !== '' ? $status : (string) $existing['status'];
+    $shouldSendFunctionConfirmation = (string) $existing['booking_type'] === 'function'
+        && $status !== ''
+        && in_array($nextStatus, ['approved', 'confirmed'], true)
+        && $nextStatus !== (string) $existing['status'];
+    if (
+        (string) $existing['booking_type'] === 'function'
+        && in_array($nextStatus, ['approved', 'confirmed'], true)
+    ) {
+        validate_function_area_assignment($assignedAreaIds, $bookingDate, $startTime, $endTime, $bookingId);
+    }
 
     $updates = ['updated_by_user_id = :updated_by_user_id', 'updated_at = NOW()'];
     $params = ['id' => $bookingId, 'updated_by_user_id' => $manager['id']];
@@ -706,35 +1139,62 @@ function update_booking(int $bookingId, array $data, array $manager): array
         $updates[] = 'status = :status';
         $params['status'] = $status;
     }
-    if ($managerMessage !== '') {
+    if (array_key_exists('manager_message', $data)) {
         $updates[] = 'manager_message = :manager_message';
         $params['manager_message'] = $managerMessage;
     }
-    if ($assignedAreaId !== null) {
+    if (array_key_exists('assigned_area_id', $data) || array_key_exists('assigned_area_ids', $data) || $recommendation !== null || $manualRecommendation !== null) {
         $updates[] = 'assigned_area_id = :assigned_area_id';
         $params['assigned_area_id'] = $assignedAreaId;
+    }
+    if (array_key_exists('preferred_area_id', $data)) {
+        $updates[] = 'preferred_area_id = :preferred_area_id';
+        $params['preferred_area_id'] = $preferredAreaId;
+    }
+    if (array_key_exists('guest_count', $data)) {
+        $updates[] = 'guest_count = :guest_count';
+        $params['guest_count'] = $guestCount;
+    }
+    if (array_key_exists('date', $data) || array_key_exists('time', $data)) {
+        $updates[] = 'booking_date = :booking_date';
+        $updates[] = 'start_time = :start_time';
+        $updates[] = 'end_time = :end_time';
+        $params['booking_date'] = $bookingDate;
+        $params['start_time'] = $startTime;
+        $params['end_time'] = $endTime;
+    }
+    if (array_key_exists('notes', $data)) {
+        $updates[] = 'notes = :notes';
+        $params['notes'] = clean_string($data['notes']);
+    }
+    if (array_key_exists('staff_notes', $data)) {
+        $updates[] = 'staff_notes = :staff_notes';
+        $params['staff_notes'] = clean_string($data['staff_notes']);
+    }
+    if (array_key_exists('event_type', $data)) {
+        $updates[] = 'event_type = :event_type';
+        $params['event_type'] = clean_string($data['event_type']);
     }
 
     $stmt = db()->prepare('UPDATE bookings SET ' . implode(', ', $updates) . ' WHERE id = :id');
     $stmt->execute($params);
 
-    if (!empty($data['table_ids']) && is_array($data['table_ids'])) {
-        $tableIds = array_map('intval', $data['table_ids']);
-        attach_tables_to_booking($bookingId, $tableIds);
+    if ($recommendation !== null) {
+        attach_tables_to_booking($bookingId, $recommendation['table_ids']);
+        log_ai_assignment($bookingId, $recommendation, (int) $manager['id'], false);
+    } elseif ($manualRecommendation !== null) {
+        attach_tables_to_booking($bookingId, $manualRecommendation['table_ids']);
+        log_ai_assignment($bookingId, $manualRecommendation, (int) $manager['id'], true);
+    }
 
-        $numberStmt = db()->prepare('SELECT table_number FROM venue_tables WHERE id IN (' . implode(',', array_fill(0, count($tableIds), '?')) . ') ORDER BY table_number');
-        $numberStmt->execute($tableIds);
-        $numbers = array_map('intval', array_column($numberStmt->fetchAll(), 'table_number'));
-        log_ai_assignment($bookingId, [
-            'area_id' => $assignedAreaId,
-            'table_numbers' => $numbers,
-            'explanation' => 'Manager manually overrode the assignment after review.',
-            'rules_snapshot' => ['override_reason' => clean_string($data['override_reason'] ?? 'Manager judgement')],
-        ], (int) $manager['id'], true);
+    if ((string) $existing['booking_type'] === 'function' && (array_key_exists('assigned_area_ids', $data) || array_key_exists('assigned_area_id', $data))) {
+        attach_function_areas_to_booking($bookingId, $assignedAreaIds);
     }
 
     $booking = fetch_booking($bookingId);
-    if ($booking && $managerMessage !== '') {
+    if ($booking && $shouldSendFunctionConfirmation) {
+        create_function_confirmation_email($booking, $managerMessage);
+    } elseif ($booking && $managerMessage !== '') {
         create_email_log(
             $bookingId,
             $booking['customer_email'],
@@ -754,11 +1214,29 @@ function fetch_booking(int $bookingId): ?array
         'SELECT b.*, c.name AS customer_name, c.email AS customer_email, c.phone AS customer_phone,
                 preferred.name AS preferred_area_name, assigned.name AS assigned_area_name,
                 (
+                    SELECT GROUP_CONCAT(a.id ORDER BY a.sort_order, a.id SEPARATOR ",")
+                    FROM booking_function_areas bfa
+                    JOIN areas a ON a.id = bfa.area_id
+                    WHERE bfa.booking_id = b.id
+                ) AS assigned_area_ids,
+                (
+                    SELECT GROUP_CONCAT(a.name ORDER BY a.sort_order, a.id SEPARATOR ", ")
+                    FROM booking_function_areas bfa
+                    JOIN areas a ON a.id = bfa.area_id
+                    WHERE bfa.booking_id = b.id
+                ) AS assigned_area_names,
+                (
                     SELECT GROUP_CONCAT(vt.table_number ORDER BY vt.table_number SEPARATOR ", ")
                     FROM booking_tables bt
                     JOIN venue_tables vt ON vt.id = bt.table_id
                     WHERE bt.booking_id = b.id
-                ) AS table_numbers
+                ) AS table_numbers,
+                (
+                    SELECT GROUP_CONCAT(vt.id ORDER BY vt.table_number SEPARATOR ",")
+                    FROM booking_tables bt
+                    JOIN venue_tables vt ON vt.id = bt.table_id
+                    WHERE bt.booking_id = b.id
+                ) AS table_ids
          FROM bookings b
          JOIN customers c ON c.id = b.customer_id
          LEFT JOIN areas preferred ON preferred.id = b.preferred_area_id
@@ -819,7 +1297,41 @@ function dashboard_payload(): array
          ORDER BY total DESC'
     )->fetchAll();
 
-    return ['cards' => $cards, 'recent' => $recent, 'area_mix' => $areaMix];
+    $statusMix = db()->query(
+        'SELECT status, COUNT(*) AS total
+         FROM bookings
+         GROUP BY status
+         ORDER BY total DESC'
+    )->fetchAll();
+
+    $upcoming = db()->query(
+        'SELECT b.id, b.booking_reference, b.booking_type, b.status, b.booking_date, b.start_time, b.guest_count,
+                c.name AS customer_name, a.name AS assigned_area_name
+         FROM bookings b
+         JOIN customers c ON c.id = b.customer_id
+         LEFT JOIN areas a ON a.id = b.assigned_area_id
+         WHERE b.booking_date >= CURDATE()
+           AND b.status NOT IN ("cancelled", "declined", "no_show")
+         ORDER BY b.booking_date ASC, b.start_time ASC
+         LIMIT 8'
+    )->fetchAll();
+
+    $activity = db()->query(
+        'SELECT l.*, u.name AS user_name
+         FROM activity_logs l
+         LEFT JOIN users u ON u.id = l.user_id
+         ORDER BY l.created_at DESC
+         LIMIT 8'
+    )->fetchAll();
+
+    return [
+        'cards' => $cards,
+        'recent' => $recent,
+        'area_mix' => $areaMix,
+        'status_mix' => $statusMix,
+        'upcoming' => $upcoming,
+        'activity' => $activity,
+    ];
 }
 
 function scalar_query(string $sql, array $params): int
@@ -889,7 +1401,12 @@ try {
     }
 
     if ($method === 'GET' && $route === 'bookings') {
-        list_bookings('table');
+        $type = clean_string($_GET['type'] ?? 'table');
+        list_bookings(match ($type) {
+            'all' => null,
+            'function' => 'function',
+            default => 'table',
+        });
     }
 
     if ($method === 'POST' && $route === 'bookings') {
@@ -900,7 +1417,7 @@ try {
         respond($result, 201);
     }
 
-    if ($segments[0] ?? '' === 'bookings' && isset($segments[1]) && $method === 'PUT') {
+    if (($segments[0] ?? '') === 'bookings' && isset($segments[1]) && $method === 'PUT') {
         $manager = require_manager();
         db()->beginTransaction();
         $result = update_booking((int) $segments[1], json_body(), $manager);
@@ -912,7 +1429,15 @@ try {
         list_bookings('function');
     }
 
-    if ($segments[0] ?? '' === 'functions' && isset($segments[1]) && $method === 'PUT') {
+    if ($method === 'POST' && $route === 'functions') {
+        $manager = require_manager();
+        db()->beginTransaction();
+        $result = create_manager_function_booking(json_body(), $manager);
+        db()->commit();
+        respond(['item' => $result], 201);
+    }
+
+    if (($segments[0] ?? '') === 'functions' && isset($segments[1]) && $method === 'PUT') {
         $manager = require_manager();
         db()->beginTransaction();
         $result = update_booking((int) $segments[1], json_body(), $manager);
@@ -923,12 +1448,8 @@ try {
     if ($method === 'GET' && $route === 'calendar') {
         require_manager();
         $stmt = db()->query(
-            'SELECT b.id, b.booking_reference, b.booking_type, b.status, b.booking_date, b.start_time, b.end_time, b.guest_count,
-                    c.name AS customer_name, a.name AS assigned_area_name
-             FROM bookings b
-             JOIN customers c ON c.id = b.customer_id
-             LEFT JOIN areas a ON a.id = b.assigned_area_id
-             WHERE b.status NOT IN ("cancelled", "declined", "no_show")
+            booking_select_sql(null) .
+            ' AND b.status NOT IN ("cancelled", "declined", "no_show")
              ORDER BY b.booking_date, b.start_time'
         );
         respond(['items' => $stmt->fetchAll()]);
@@ -975,6 +1496,18 @@ try {
              FROM email_logs e
              LEFT JOIN bookings b ON b.id = e.booking_id
              ORDER BY e.created_at DESC
+             LIMIT 100'
+        )->fetchAll();
+        respond(['items' => $items]);
+    }
+
+    if ($method === 'GET' && $route === 'activity-logs') {
+        require_manager();
+        $items = db()->query(
+            'SELECT l.*, u.name AS user_name
+             FROM activity_logs l
+             LEFT JOIN users u ON u.id = l.user_id
+             ORDER BY l.created_at DESC
              LIMIT 100'
         )->fetchAll();
         respond(['items' => $items]);

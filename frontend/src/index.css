@@ -395,6 +395,7 @@ layer(base);
 }
 .flatpickr-calendar {
   @apply mt-2 !bg-white !rounded-xl !p-5 !border !border-gray-200 !shadow-theme-md dark:!border-white/5 !text-gray-500 dark:!bg-gray-dark dark:!text-gray-400 dark:!shadow-theme-xl 2xsm:!w-auto;
+  z-index: 1000000 !important;
   box-shadow: 0px 4px 8px -2px rgba(16, 24, 40, 0.1),
     0px 2px 4px -2px rgba(16, 24, 40, 0.06) !important;
 }
@@ -545,6 +546,21 @@ span.flatpickr-weekday,
 
 .flatpickr-calendar.static {
   @apply right-0;
+}
+
+.resrva-calendar-split {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: minmax(0, 1fr);
+}
+
+@media (min-width: 1280px) {
+  .resrva-calendar-split {
+    grid-template-columns: minmax(0, 1fr) 10px minmax(
+        280px,
+        var(--calendar-list-width, 360px)
+      );
+  }
 }
 
 @media (max-width: 639px) {

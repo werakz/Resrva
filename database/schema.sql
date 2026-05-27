@@ -74,6 +74,7 @@ CREATE TABLE bookings (
   preferred_area_id INT NULL,
   assigned_area_id INT NULL,
   notes TEXT NULL,
+  staff_notes TEXT NULL,
   event_type VARCHAR(120) NULL,
   manager_message TEXT NULL,
   created_by_user_id INT NULL,
@@ -95,6 +96,14 @@ CREATE TABLE booking_tables (
   PRIMARY KEY (booking_id, table_id),
   CONSTRAINT fk_booking_tables_booking FOREIGN KEY (booking_id) REFERENCES bookings(id) ON DELETE CASCADE,
   CONSTRAINT fk_booking_tables_table FOREIGN KEY (table_id) REFERENCES venue_tables(id)
+) ENGINE=InnoDB;
+
+CREATE TABLE booking_function_areas (
+  booking_id INT NOT NULL,
+  area_id INT NOT NULL,
+  PRIMARY KEY (booking_id, area_id),
+  CONSTRAINT fk_booking_function_areas_booking FOREIGN KEY (booking_id) REFERENCES bookings(id) ON DELETE CASCADE,
+  CONSTRAINT fk_booking_function_areas_area FOREIGN KEY (area_id) REFERENCES areas(id)
 ) ENGINE=InnoDB;
 
 CREATE TABLE ai_assignment_logs (

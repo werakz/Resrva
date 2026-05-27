@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Save } from "lucide-react";
+import { RefreshCw, Save } from "lucide-react";
 import { apiFetch, toJsonBody } from "../lib/api";
 import type { MetaPayload, OpeningHour } from "../types";
 import { FieldLabel, FormMessage, inputClass, selectClass } from "../components/resrva/FormField";
@@ -48,6 +48,10 @@ export default function SettingsPage() {
     await loadSettings();
   };
 
+  if (!meta && message?.type === "error") {
+    return <FormMessage type="error">{message.text}</FormMessage>;
+  }
+
   if (!meta) {
     return <LoadingState label="Loading settings" />;
   }
@@ -56,12 +60,17 @@ export default function SettingsPage() {
     <>
       <PageHeader
         title="Settings"
-        description="Booking rules, venue details, and opening hours used by validation and assignment."
         action={
-          <button type="button" onClick={saveSettings} className="inline-flex h-10 items-center gap-2 rounded-lg bg-brand-600 px-4 text-sm font-medium text-white hover:bg-brand-700">
-            <Save className="size-4" />
-            Save
-          </button>
+          <>
+            <button type="button" onClick={loadSettings} className="inline-flex h-10 items-center gap-2 rounded-lg border border-gray-300 bg-white px-3 text-sm font-medium text-gray-700 shadow-theme-xs hover:bg-gray-50">
+              <RefreshCw className="size-4" />
+              Refresh
+            </button>
+            <button type="button" onClick={saveSettings} className="inline-flex h-10 items-center gap-2 rounded-lg bg-brand-600 px-4 text-sm font-medium text-white hover:bg-brand-700">
+              <Save className="size-4" />
+              Save
+            </button>
+          </>
         }
       />
 
@@ -92,6 +101,14 @@ export default function SettingsPage() {
             <div>
               <FieldLabel htmlFor="venue-phone">Venue phone</FieldLabel>
               <input id="venue-phone" className={inputClass} value={settings.venue_phone || ""} onChange={(event) => updateSetting("venue_phone", event.target.value)} />
+            </div>
+            <div>
+              <FieldLabel htmlFor="annual-closed-day">Closed day</FieldLabel>
+              <input id="annual-closed-day" className={inputClass} value={settings.annual_closed_day || ""} onChange={(event) => updateSetting("annual_closed_day", event.target.value)} />
+            </div>
+            <div>
+              <FieldLabel htmlFor="venue-name">Venue</FieldLabel>
+              <input id="venue-name" className={inputClass} value={settings.venue_name || ""} onChange={(event) => updateSetting("venue_name", event.target.value)} />
             </div>
           </div>
           {message ? <div className="mt-4"><FormMessage type={message.type}>{message.text}</FormMessage></div> : null}

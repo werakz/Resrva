@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Save } from "lucide-react";
+import { RefreshCw, Save } from "lucide-react";
 import { apiFetch, toJsonBody } from "../lib/api";
 import type { Area, TableRecord } from "../types";
 import { FieldLabel, FormMessage, inputClass, selectClass } from "../components/resrva/FormField";
@@ -41,6 +41,11 @@ export default function TablesAreasPage() {
     return data?.tables.find((table) => String(table.id) === selectedTableId) || null;
   }, [data, selectedTableId]);
 
+  const activeTables = useMemo(
+    () => (data?.tables || []).filter((table) => Number(table.active)).length,
+    [data],
+  );
+
   useEffect(() => {
     if (selectedTable) {
       setCapacity(String(selectedTable.capacity));
@@ -59,6 +64,10 @@ export default function TablesAreasPage() {
     await loadTables();
   };
 
+  if (!data && message?.type === "error") {
+    return <FormMessage type="error">{message.text}</FormMessage>;
+  }
+
   if (!data) {
     return <LoadingState label="Loading tables and areas" />;
   }
@@ -67,8 +76,28 @@ export default function TablesAreasPage() {
     <>
       <PageHeader
         title="Tables / Areas"
-        description="Old Canberra Inn area map used by the local AI-assisted assignment engine."
+        action={
+          <button type="button" onClick={loadTables} className="inline-flex h-10 items-center gap-2 rounded-lg border border-gray-300 bg-white px-3 text-sm font-medium text-gray-700 shadow-theme-xs hover:bg-gray-50">
+            <RefreshCw className="size-4" />
+            Refresh
+          </button>
+        }
       />
+
+      <div className="mb-5 grid gap-4 md:grid-cols-3">
+        <div className="rounded-lg border border-gray-200 bg-white p-4 shadow-theme-sm">
+          <p className="text-sm text-gray-500">Areas</p>
+          <p className="mt-1 text-2xl font-semibold text-gray-900">{data.areas.length}</p>
+        </div>
+        <div className="rounded-lg border border-gray-200 bg-white p-4 shadow-theme-sm">
+          <p className="text-sm text-gray-500">Tables</p>
+          <p className="mt-1 text-2xl font-semibold text-gray-900">{data.tables.length}</p>
+        </div>
+        <div className="rounded-lg border border-gray-200 bg-white p-4 shadow-theme-sm">
+          <p className="text-sm text-gray-500">Active</p>
+          <p className="mt-1 text-2xl font-semibold text-gray-900">{activeTables}</p>
+        </div>
+      </div>
 
       <div className="grid gap-6 xl:grid-cols-[1.2fr_0.8fr]">
         <div className="grid gap-4 md:grid-cols-2">
@@ -107,9 +136,9 @@ export default function TablesAreasPage() {
                   ))}
                 </div>
                 {Number(area.function_enabled) ? (
-                  <p className="mt-4 text-xs font-medium text-warning-700">
-                    Function-enabled area.
-                  </p>
+                  <span className="mt-4 inline-flex rounded-full bg-warning-50 px-2 py-1 text-xs font-medium text-warning-700">
+                    Function
+                  </span>
                 ) : null}
               </section>
             );
@@ -117,10 +146,7 @@ export default function TablesAreasPage() {
         </div>
 
         <aside className="rounded-lg border border-gray-200 bg-white p-5 shadow-theme-sm">
-          <h2 className="text-lg font-semibold text-gray-900">Table controls</h2>
-          <p className="mt-1 text-sm text-gray-500">
-            Capacity and availability changes affect future assignment recommendations.
-          </p>
+          <h2 className="text-lg font-semibold text-gray-900">Table</h2>
 
           <div className="mt-4 space-y-4">
             <div>

@@ -44,11 +44,15 @@ export type Booking = {
   end_time: string;
   preferred_area_id?: number | null;
   assigned_area_id?: number | null;
+  assigned_area_ids?: string | null;
   preferred_area_name?: string | null;
   assigned_area_name?: string | null;
+  assigned_area_names?: string | null;
+  table_ids?: string | null;
   table_numbers?: string | null;
   event_type?: string | null;
   notes?: string | null;
+  staff_notes?: string | null;
   manager_message?: string | null;
   created_at?: string;
   updated_at?: string;
@@ -73,6 +77,9 @@ export type DashboardPayload = {
   };
   recent: Booking[];
   area_mix: Array<{ area_name: string; total: number }>;
+  status_mix: Array<{ status: string; total: number }>;
+  upcoming: Booking[];
+  activity: ActivityLog[];
 };
 
 export type TableRecord = {
@@ -105,5 +112,16 @@ export type EmailLog = {
   subject: string;
   body: string;
   status: string;
+  created_at: string;
+};
+
+export type ActivityLog = {
+  id: number;
+  user_id?: number | null;
+  user_name?: string | null;
+  action: string;
+  entity_type: string;
+  entity_id?: number | null;
+  details_json?: string | null;
   created_at: string;
 };
