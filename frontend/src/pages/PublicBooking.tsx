@@ -8,8 +8,6 @@ import "./PublicBooking.css";
 
 type BookingForm = {
   service: "lunch" | "dinner" | "function" | "";
-  first_name: string;
-  last_name: string;
   name: string;
   email: string;
   phone: string;
@@ -20,11 +18,6 @@ type BookingForm = {
   preferred_area_id: string;
   event_type: string;
   notes: string;
-  allergy: boolean;
-  dietary: boolean;
-  highchair: boolean;
-  accessibility: boolean;
-  pram_space: boolean;
   marketing_consent: boolean;
   terms_agreed: boolean;
 };
@@ -47,8 +40,6 @@ type Confirmation = {
 
 const initialForm: BookingForm = {
   service: "",
-  first_name: "",
-  last_name: "",
   name: "",
   email: "",
   phone: "",
@@ -59,11 +50,6 @@ const initialForm: BookingForm = {
   preferred_area_id: "",
   event_type: "",
   notes: "",
-  allergy: false,
-  dietary: false,
-  highchair: false,
-  accessibility: false,
-  pram_space: false,
   marketing_consent: true,
   terms_agreed: false,
 };
@@ -250,13 +236,15 @@ function DetailsField({
   id,
   label,
   children,
+  className = "",
 }: {
   id: string;
   label: string;
   children: React.ReactNode;
+  className?: string;
 }) {
   return (
-    <div>
+    <div className={["public-booking-field", className].filter(Boolean).join(" ")}>
       <label htmlFor={id} className="public-booking-label">
         {label}
       </label>
@@ -358,37 +346,23 @@ export default function PublicBooking() {
     return null;
   }, [blockedOnlineDateSet, form.date, form.service, form.time, functionRequestsEnabled, guestCount, meta, tableBookingsEnabled]);
 
-  const detailsComplete = Boolean(form.first_name && form.last_name && form.email && form.phone && form.terms_agreed);
+  const detailsComplete = Boolean(form.name.trim() && form.email && form.phone && form.terms_agreed);
 
   const updateField = (field: keyof BookingForm, value: string) => {
     setForm((current) => ({ ...current, [field]: value }));
   };
 
   const updateBoolean = (
-    field:
-      | "allergy"
-      | "dietary"
-      | "highchair"
-      | "accessibility"
-      | "pram_space"
-      | "marketing_consent"
-      | "terms_agreed",
+    field: "marketing_consent" | "terms_agreed",
     value: boolean,
   ) => {
     setForm((current) => ({ ...current, [field]: value }));
   };
 
-  const fullName = `${form.first_name} ${form.last_name}`.trim();
-  const specialRequirements = [
-    form.allergy ? "Allergy" : "",
-    form.dietary ? "Dietary requirement" : "",
-    form.highchair ? "Highchair" : "",
-    form.accessibility ? "Accessibility required" : "",
-    form.pram_space ? "Pram space required" : "",
-    form.company_name ? `Company: ${form.company_name}` : "",
-  ].filter(Boolean);
-
-  const bookingNotes = [form.notes, specialRequirements.join("; ")].filter(Boolean).join("\n");
+  const fullName = form.name.trim();
+  const bookingNotes = [form.notes, form.company_name ? `Company: ${form.company_name}` : ""]
+    .filter(Boolean)
+    .join("\n");
 
   const updateGuests = (amount: number) => {
     setForm((current) => {
@@ -668,41 +642,32 @@ export default function PublicBooking() {
             <Card className="public-booking-details-card">
               <div className="public-booking-details-heading">
                 <h1>Customer Details</h1>
-                <span className="public-booking-info-dot">i</span>
               </div>
 
               <div className="public-booking-line-fields">
-                <DetailsField id="first_name" label="First Name *">
+                <DetailsField id="name" label="Name *" className="public-booking-field-full">
                   <input
-                    id="first_name"
+                    id="name"
                     className="public-booking-line-input"
                     required
-                    value={form.first_name}
-                    onChange={(event) => updateField("first_name", event.target.value)}
+                    value={form.name}
+                    onChange={(event) => updateField("name", event.target.value)}
                   />
                 </DetailsField>
 
-                <DetailsField id="last_name" label="Last Name *">
-                  <input
-                    id="last_name"
-                    className="public-booking-line-input"
-                    required
-                    value={form.last_name}
-                    onChange={(event) => updateField("last_name", event.target.value)}
-                  />
+                <DetailsField id="phone" label="Phone *">
+                  <div className="public-booking-phone-line">
+                    <span className="public-booking-country">AU +61</span>
+                    <input
+                      id="phone"
+                      className="public-booking-line-input"
+                      required
+                      placeholder="Mobile"
+                      value={form.phone}
+                      onChange={(event) => updateField("phone", event.target.value)}
+                    />
+                  </div>
                 </DetailsField>
-
-                <div className="public-booking-phone-line">
-                  <span className="public-booking-country">AU +61</span>
-                  <input
-                    id="phone"
-                    className="public-booking-line-input"
-                    required
-                    placeholder="Mobile *"
-                    value={form.phone}
-                    onChange={(event) => updateField("phone", event.target.value)}
-                  />
-                </div>
 
                 <DetailsField id="email" label="Email *">
                   <input
@@ -746,47 +711,6 @@ export default function PublicBooking() {
                   onChange={(event) => updateField("notes", event.target.value)}
                 />
               </DetailsField>
-
-              <div className="public-booking-requirements">
-                <h2>Special Requirements</h2>
-                <CheckboxField
-                  id="allergy"
-                  checked={form.allergy}
-                  onChange={(checked) => updateBoolean("allergy", checked)}
-                >
-                  Allergy (Please specify in notes)
-                </CheckboxField>
-                <CheckboxField
-                  id="dietary"
-                  checked={form.dietary}
-                  onChange={(checked) => updateBoolean("dietary", checked)}
-                >
-                  Dietary Requirement (Please specify in notes)
-                </CheckboxField>
-                <div className="public-booking-requirements-grid">
-                  <CheckboxField
-                    id="highchair"
-                    checked={form.highchair}
-                    onChange={(checked) => updateBoolean("highchair", checked)}
-                  >
-                    Highchair
-                  </CheckboxField>
-                  <CheckboxField
-                    id="accessibility"
-                    checked={form.accessibility}
-                    onChange={(checked) => updateBoolean("accessibility", checked)}
-                  >
-                    Accessibility Required
-                  </CheckboxField>
-                </div>
-                <CheckboxField
-                  id="pram_space"
-                  checked={form.pram_space}
-                  onChange={(checked) => updateBoolean("pram_space", checked)}
-                >
-                  Pram Space Required
-                </CheckboxField>
-              </div>
 
               <div className="public-booking-consents">
                 <CheckboxField

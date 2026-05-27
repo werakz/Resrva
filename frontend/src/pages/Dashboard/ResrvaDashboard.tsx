@@ -4,7 +4,6 @@ import {
   BarChart3,
   CalendarCheck,
   Clock3,
-  RefreshCw,
   Table2,
   UsersRound,
   Utensils,
@@ -421,19 +420,7 @@ export default function ResrvaDashboard() {
 
   return (
     <>
-      <PageHeader
-        title="Dashboard"
-        action={
-          <button
-            type="button"
-            onClick={loadDashboard}
-            className="inline-flex h-10 items-center gap-2 rounded-lg border border-gray-300 bg-white px-3 text-sm font-medium text-gray-700 shadow-theme-xs hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-300"
-          >
-            <RefreshCw className="size-4" />
-            Refresh
-          </button>
-        }
-      />
+      <PageHeader title="Dashboard" />
 
       <div className="grid gap-5 xl:grid-cols-3">
         <TodayKpi data={data.today} mealFilter={mealFilter} onMealFilterChange={setMealFilter} />

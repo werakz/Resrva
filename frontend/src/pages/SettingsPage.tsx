@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import flatpickr from "flatpickr";
 import type { Instance as FlatpickrInstance } from "flatpickr/dist/types/instance";
-import { CalendarDays, ImageIcon, RefreshCw, Save, Trash2, Upload, X } from "lucide-react";
+import { CalendarDays, ImageIcon, Save, Trash2, Upload, X } from "lucide-react";
 import { apiFetch, apiUpload, toJsonBody } from "../lib/api";
 import type { MetaPayload, OpeningHour } from "../types";
 import { FieldLabel, FormMessage, SelectInput, inputClass, textareaClass } from "../components/resrva/FormField";
@@ -309,16 +309,10 @@ export default function SettingsPage() {
       <PageHeader
         title="Settings"
         action={
-          <>
-            <button type="button" onClick={loadSettings} className="inline-flex h-10 items-center gap-2 rounded-lg border border-gray-300 bg-white px-3 text-sm font-medium text-gray-700 shadow-theme-xs hover:bg-gray-50">
-              <RefreshCw className="size-4" />
-              Refresh
-            </button>
-            <button type="button" onClick={saveSettings} className="inline-flex h-10 items-center gap-2 rounded-lg bg-brand-600 px-4 text-sm font-medium text-white hover:bg-brand-700">
-              <Save className="size-4" />
-              Save
-            </button>
-          </>
+          <button type="button" onClick={saveSettings} className="inline-flex h-10 items-center gap-2 rounded-lg bg-brand-600 px-4 text-sm font-medium text-white hover:bg-brand-700">
+            <Save className="size-4" />
+            Save
+          </button>
         }
       />
 

@@ -13,9 +13,7 @@ import {
   MoreHorizontal,
   Moon,
   Plus,
-  RefreshCw,
   Save,
-  Search,
   Sun,
   User,
   X,
@@ -1271,7 +1269,6 @@ export default function BookingsPage() {
     () => groupBookings(sortedBookings(data?.items || [], sortKey)),
     [data, sortKey],
   );
-  const totalVisible = data?.items.length || 0;
   const defaultDurationMinutes = Number(meta?.settings.default_duration_minutes || 120);
   const createTableAvailability = useMemo(
     () =>
@@ -1375,15 +1372,6 @@ export default function BookingsPage() {
     setReplyTarget(booking);
     setNotifyPrompt(null);
     setReplyOpenRequest({ token: Date.now(), purpose });
-  };
-
-  const updateFilter = (field: keyof typeof filters, value: string) => {
-    setPage(1);
-    setFilters((current) => ({
-      ...current,
-      [field]: value,
-      date_scope: field === "date_from" || field === "date_to" ? "" : current.date_scope,
-    }));
   };
 
   const updateDateRange = (dateFrom: string, dateTo: string, scope: DateScope = "") => {
@@ -1581,23 +1569,13 @@ export default function BookingsPage() {
       <PageHeader
         title="Bookings"
         action={
-          <>
-            <Button
-              size="sm"
-              onClick={openCreateModal}
-              startIcon={<Plus className="size-4" />}
-            >
-              Create booking
-            </Button>
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={loadBookings}
-              startIcon={<RefreshCw className="size-4" />}
-            >
-              Refresh
-            </Button>
-          </>
+          <Button
+            size="sm"
+            onClick={openCreateModal}
+            startIcon={<Plus className="size-4" />}
+          >
+            Create booking
+          </Button>
         }
       />
 
@@ -2032,41 +2010,23 @@ export default function BookingsPage() {
                   ))}
                 </div>
 
-                <div className="flex flex-wrap items-center gap-3 text-sm text-gray-500 dark:text-gray-400">
-                  <Badge color="light" size="sm">
-                    {totalVisible} shown
-                  </Badge>
-                  <span>
-                    Page {data.meta.page} of {Math.max(data.meta.total_pages, 1)}
-                  </span>
-                </div>
-              </div>
-
-              <div className="grid gap-3 xl:grid-cols-[minmax(320px,1fr)_220px_380px]">
-                <div className="relative">
-                  <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-gray-400" />
-                  <input
-                    className={`${inputClass} pl-10`}
-                    placeholder="Search name, email, phone, or ref"
-                    value={filters.search}
-                    onChange={(event) => updateFilter("search", event.target.value)}
+                <div className="grid w-full gap-3 sm:grid-cols-[minmax(180px,220px)_minmax(280px,380px)] xl:w-auto">
+                  <SortDropdown
+                    value={sortKey}
+                    open={isSortOpen}
+                    onToggle={() => {
+                      setIsSortOpen((current) => !current);
+                    }}
+                    onChange={updateSort}
+                  />
+                  <DateRangePicker
+                    start={filters.date_from}
+                    end={filters.date_to}
+                    onRangeChange={(dateFrom, dateTo) => updateDateRange(dateFrom, dateTo)}
+                    onStepRange={stepDateRange}
+                    onOpen={() => setIsSortOpen(false)}
                   />
                 </div>
-                <SortDropdown
-                  value={sortKey}
-                  open={isSortOpen}
-                  onToggle={() => {
-                    setIsSortOpen((current) => !current);
-                  }}
-                  onChange={updateSort}
-                />
-                <DateRangePicker
-                  start={filters.date_from}
-                  end={filters.date_to}
-                  onRangeChange={(dateFrom, dateTo) => updateDateRange(dateFrom, dateTo)}
-                  onStepRange={stepDateRange}
-                  onOpen={() => setIsSortOpen(false)}
-                />
               </div>
             </div>
 
