@@ -80,6 +80,23 @@ export type Paginated<T> = {
 };
 
 export type DashboardPayload = {
+  today: Record<
+    "all" | "lunch" | "dinner",
+    {
+      bookings: number;
+      guests: number;
+    }
+  >;
+  pending_actions: {
+    function_requests: number;
+    bookings_without_tables: number;
+  };
+  guest_chart: {
+    weekly: Array<{ date: string; guests: number }>;
+    monthly: Array<{ date: string; guests: number }>;
+  };
+  today_bookings: Booking[];
+  upcoming_functions: Booking[];
   cards: {
     today_bookings: number;
     pending_functions: number;

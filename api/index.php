@@ -1505,11 +1505,71 @@ function meta_payload(): array
     ];
 }
 
+function dashboard_guest_chart_points(string $startDate, int $days): array
+{
+    $start = new DateTimeImmutable($startDate);
+    $end = $start->modify('+' . max($days - 1, 0) . ' days')->format('Y-m-d');
+    $stmt = db()->prepare(
+        'SELECT booking_date, COALESCE(SUM(guest_count), 0) AS guests
+         FROM bookings
+         WHERE booking_date BETWEEN :start_date AND :end_date
+           AND status NOT IN ("cancelled", "declined", "no_show")
+         GROUP BY booking_date'
+    );
+    $stmt->execute(['start_date' => $startDate, 'end_date' => $end]);
+    $guestsByDate = [];
+    foreach ($stmt->fetchAll() as $row) {
+        $guestsByDate[(string) $row['booking_date']] = (int) $row['guests'];
+    }
+
+    $points = [];
+    for ($index = 0; $index < $days; $index++) {
+        $date = $start->modify("+{$index} days")->format('Y-m-d');
+        $points[] = [
+            'date' => $date,
+            'guests' => $guestsByDate[$date] ?? 0,
+        ];
+    }
+
+    return $points;
+}
+
 function dashboard_payload(): array
 {
     require_manager();
     $today = date('Y-m-d');
     $nextWeek = (new DateTime('+7 days'))->format('Y-m-d');
+    $monthStart = (new DateTimeImmutable('first day of this month'))->format('Y-m-d');
+    $daysInMonth = (int) (new DateTimeImmutable('last day of this month'))->format('j');
+
+    $todayMetricsStmt = db()->prepare(
+        'SELECT
+            COUNT(*) AS all_bookings,
+            COALESCE(SUM(guest_count), 0) AS all_guests,
+            COALESCE(SUM(CASE WHEN start_time < "17:00:00" THEN 1 ELSE 0 END), 0) AS lunch_bookings,
+            COALESCE(SUM(CASE WHEN start_time < "17:00:00" THEN guest_count ELSE 0 END), 0) AS lunch_guests,
+            COALESCE(SUM(CASE WHEN start_time >= "17:00:00" THEN 1 ELSE 0 END), 0) AS dinner_bookings,
+            COALESCE(SUM(CASE WHEN start_time >= "17:00:00" THEN guest_count ELSE 0 END), 0) AS dinner_guests
+         FROM bookings
+         WHERE booking_date = :today
+           AND status NOT IN ("cancelled", "declined", "no_show")'
+    );
+    $todayMetricsStmt->execute(['today' => $today]);
+    $todayMetrics = $todayMetricsStmt->fetch() ?: [];
+
+    $pendingFunctionRequests = scalar_query(
+        'SELECT COUNT(*) FROM bookings WHERE booking_type = "function" AND status = "pending"',
+        []
+    );
+    $bookingsWithoutTables = scalar_query(
+        'SELECT COUNT(*)
+         FROM bookings b
+         WHERE b.booking_type = "table"
+           AND b.booking_date >= ?
+           AND b.status NOT IN ("cancelled", "declined", "no_show")
+           AND NOT EXISTS (SELECT 1 FROM booking_tables bt WHERE bt.booking_id = b.id)',
+        [$today]
+    );
 
     $cards = [
         'today_bookings' => scalar_query('SELECT COUNT(*) FROM bookings WHERE booking_type = "table" AND booking_date = ?', [$today]),
@@ -1555,8 +1615,27 @@ function dashboard_payload(): array
          WHERE b.booking_date >= CURDATE()
            AND b.status NOT IN ("cancelled", "declined", "no_show")
          ORDER BY b.booking_date ASC, b.start_time ASC
-         LIMIT 8'
+        LIMIT 8'
     )->fetchAll();
+
+    $todayBookingsStmt = db()->prepare(
+        booking_select_sql(null) .
+        ' AND b.booking_date = :today
+          AND b.status NOT IN ("cancelled", "declined", "no_show")
+          ORDER BY b.start_time ASC, b.created_at ASC'
+    );
+    $todayBookingsStmt->execute(['today' => $today]);
+    $todayBookings = $todayBookingsStmt->fetchAll();
+
+    $upcomingFunctionsStmt = db()->prepare(
+        booking_select_sql('function') .
+        ' AND b.booking_date >= :today
+          AND b.status NOT IN ("cancelled", "declined", "no_show", "completed")
+          ORDER BY b.booking_date ASC, b.start_time ASC
+          LIMIT 6'
+    );
+    $upcomingFunctionsStmt->execute(['type' => 'function', 'today' => $today]);
+    $upcomingFunctions = $upcomingFunctionsStmt->fetchAll();
 
     $activity = db()->query(
         'SELECT l.*, u.name AS user_name
@@ -1567,6 +1646,30 @@ function dashboard_payload(): array
     )->fetchAll();
 
     return [
+        'today' => [
+            'all' => [
+                'bookings' => (int) ($todayMetrics['all_bookings'] ?? 0),
+                'guests' => (int) ($todayMetrics['all_guests'] ?? 0),
+            ],
+            'lunch' => [
+                'bookings' => (int) ($todayMetrics['lunch_bookings'] ?? 0),
+                'guests' => (int) ($todayMetrics['lunch_guests'] ?? 0),
+            ],
+            'dinner' => [
+                'bookings' => (int) ($todayMetrics['dinner_bookings'] ?? 0),
+                'guests' => (int) ($todayMetrics['dinner_guests'] ?? 0),
+            ],
+        ],
+        'pending_actions' => [
+            'function_requests' => $pendingFunctionRequests,
+            'bookings_without_tables' => $bookingsWithoutTables,
+        ],
+        'guest_chart' => [
+            'weekly' => dashboard_guest_chart_points($today, 7),
+            'monthly' => dashboard_guest_chart_points($monthStart, $daysInMonth),
+        ],
+        'today_bookings' => $todayBookings,
+        'upcoming_functions' => $upcomingFunctions,
         'cards' => $cards,
         'recent' => $recent,
         'area_mix' => $areaMix,
