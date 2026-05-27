@@ -11,6 +11,7 @@ DROP TABLE IF EXISTS email_logs;
 DROP TABLE IF EXISTS ai_assignment_logs;
 DROP TABLE IF EXISTS booking_tables;
 DROP TABLE IF EXISTS bookings;
+DROP TABLE IF EXISTS online_booking_blocks;
 DROP TABLE IF EXISTS venue_tables;
 DROP TABLE IF EXISTS areas;
 DROP TABLE IF EXISTS customers;
@@ -67,6 +68,9 @@ CREATE TABLE bookings (
   booking_type ENUM('table', 'function') NOT NULL,
   status ENUM('pending', 'confirmed', 'seated', 'completed', 'cancelled', 'no_show', 'approved', 'declined') NOT NULL,
   customer_id INT NOT NULL,
+  customer_name_snapshot VARCHAR(120) NULL,
+  customer_email_snapshot VARCHAR(160) NULL,
+  customer_phone_snapshot VARCHAR(30) NULL,
   guest_count INT NOT NULL,
   booking_date DATE NOT NULL,
   start_time TIME NOT NULL,
@@ -159,6 +163,14 @@ CREATE TABLE opening_hours (
   updated_at DATETIME NOT NULL
 ) ENGINE=InnoDB;
 
+CREATE TABLE online_booking_blocks (
+  block_date DATE NOT NULL PRIMARY KEY,
+  created_by_user_id INT NULL,
+  created_at DATETIME NOT NULL,
+  updated_at DATETIME NOT NULL,
+  CONSTRAINT fk_online_booking_blocks_created_by FOREIGN KEY (created_by_user_id) REFERENCES users(id)
+) ENGINE=InnoDB;
+
 INSERT INTO users (name, email, role, password_hash, status, created_at, updated_at)
 VALUES
   ('Resrva Manager', 'manager@resrva.test', 'manager', '$2y$10$TFmxQt22rkg/nkg6ybGpeeCnbhpNSjIWwOVYeBdA7J77uhXEBwQMS', 'active', NOW(), NOW());
@@ -202,10 +214,15 @@ VALUES
   ('max_table_guests', '29', NOW()),
   ('default_duration_minutes', '120', NOW()),
   ('slot_interval_minutes', '30', NOW()),
+  ('minimum_booking_notice_minutes', '0', NOW()),
   ('annual_closed_day', '12-25', NOW()),
+  ('annual_closed_days', '12-25', NOW()),
   ('venue_name', 'Old Canberra Inn', NOW()),
   ('venue_phone', '(02) 6134 6000', NOW()),
   ('venue_email', 'manager@oldcanberrainn.com.au', NOW()),
+  ('venue_image_url', '', NOW()),
+  ('online_table_bookings_enabled', '1', NOW()),
+  ('online_function_requests_enabled', '1', NOW()),
   ('booking_policy_note', 'Online bookings are for groups of 8 or more. Smaller groups are welcome to walk in.', NOW());
 
 INSERT INTO opening_hours (day_of_week, opens_at, closes_at, is_closed, updated_at)

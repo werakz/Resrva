@@ -91,6 +91,28 @@ function clean_string(mixed $value): string
     return trim((string) $value);
 }
 
+function request_base_url(): string
+{
+    $forwardedProto = $_SERVER['HTTP_X_FORWARDED_PROTO'] ?? '';
+    $isHttps = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') || $forwardedProto === 'https';
+    $scheme = $isHttps ? 'https' : 'http';
+    $host = $_SERVER['HTTP_HOST'] ?? 'localhost';
+    $scriptDir = str_replace('\\', '/', dirname((string) ($_SERVER['SCRIPT_NAME'] ?? '/')));
+    $scriptDir = $scriptDir === '/' ? '' : rtrim($scriptDir, '/');
+
+    return "{$scheme}://{$host}{$scriptDir}";
+}
+
+function public_asset_url(string $path): string
+{
+    $path = clean_string($path);
+    if ($path === '' || preg_match('#^https?://#i', $path)) {
+        return $path;
+    }
+
+    return request_base_url() . '/' . ltrim($path, '/');
+}
+
 function nullable_int(mixed $value): ?int
 {
     if ($value === null || $value === '') {
@@ -187,6 +209,47 @@ function setting(string $key, string $fallback = ''): string
     return $value === false ? $fallback : (string) $value;
 }
 
+function settings_defaults(): array
+{
+    return [
+        'min_table_guests' => '8',
+        'max_table_guests' => '29',
+        'default_duration_minutes' => '120',
+        'slot_interval_minutes' => '30',
+        'minimum_booking_notice_minutes' => '0',
+        'annual_closed_day' => '12-25',
+        'annual_closed_days' => '12-25',
+        'venue_name' => 'Old Canberra Inn',
+        'venue_phone' => '(02) 6134 6000',
+        'venue_email' => 'manager@oldcanberrainn.com.au',
+        'venue_image_url' => '',
+        'booking_policy_note' => 'Online bookings are for groups of 8 or more. Smaller groups are welcome to walk in.',
+        'online_table_bookings_enabled' => '1',
+        'online_function_requests_enabled' => '1',
+    ];
+}
+
+function setting_enabled(string $key, bool $fallback = true): bool
+{
+    return setting($key, $fallback ? '1' : '0') !== '0';
+}
+
+function annual_closed_month_days(): array
+{
+    $raw = setting('annual_closed_days', setting('annual_closed_day', '12-25'));
+    $legacy = setting('annual_closed_day', '');
+    $values = array_filter(array_map('trim', explode(',', $raw . ',' . $legacy)));
+    $monthDays = [];
+
+    foreach ($values as $value) {
+        if (preg_match('/^\d{2}-\d{2}$/', $value)) {
+            $monthDays[] = $value;
+        }
+    }
+
+    return array_values(array_unique($monthDays));
+}
+
 function minutes_from_time(string $time): int
 {
     if (!preg_match('/^\d{2}:\d{2}$/', $time)) {
@@ -209,7 +272,7 @@ function time_from_minutes(int $minutes): string
     return sprintf('%02d:%02d', $hours, $mins);
 }
 
-function validate_booking_window(string $date, string $time, int $durationMinutes): array
+function validate_booking_window(string $date, string $time, int $durationMinutes, bool $enforceMinimumNotice = false): array
 {
     $dateObj = DateTime::createFromFormat('Y-m-d', $date);
     if (!$dateObj || $dateObj->format('Y-m-d') !== $date) {
@@ -221,8 +284,8 @@ function validate_booking_window(string $date, string $time, int $durationMinute
         fail('Bookings cannot be made in the past.', 422, ['date' => $date]);
     }
 
-    if ($dateObj->format('m-d') === setting('annual_closed_day', '12-25')) {
-        fail('Old Canberra Inn is closed on Christmas Day.', 422, ['date' => $date]);
+    if (in_array($dateObj->format('m-d'), annual_closed_month_days(), true)) {
+        fail('The venue is closed on the selected date.', 422, ['date' => $date]);
     }
 
     $dayOfWeek = (int) $dateObj->format('w');
@@ -238,6 +301,22 @@ function validate_booking_window(string $date, string $time, int $durationMinute
     $startMinutes = minutes_from_time($time);
     if ($startMinutes % $slotInterval !== 0) {
         fail("Bookings must start on a {$slotInterval}-minute slot.", 422, ['time' => $time]);
+    }
+
+    if ($enforceMinimumNotice) {
+        $minimumNoticeMinutes = max((int) setting('minimum_booking_notice_minutes', '0'), 0);
+        $bookingStart = DateTime::createFromFormat('Y-m-d H:i', "{$date} {$time}");
+        $earliestStart = new DateTime();
+        if ($minimumNoticeMinutes > 0) {
+            $earliestStart->modify("+{$minimumNoticeMinutes} minutes");
+        }
+
+        if (!$bookingStart || $bookingStart < $earliestStart) {
+            fail('This booking needs more advance notice.', 422, [
+                'minimum_notice_minutes' => $minimumNoticeMinutes,
+                'earliest_start' => $earliestStart->format('Y-m-d H:i'),
+            ]);
+        }
     }
 
     $openMinutes = minutes_from_time(substr($hours['opens_at'], 0, 5));
@@ -266,6 +345,121 @@ function booking_reference(): string
     return $reference;
 }
 
+function ensure_booking_customer_snapshots(): void
+{
+    static $checked = false;
+    if ($checked) {
+        return;
+    }
+
+    $columns = [
+        'customer_name_snapshot' => ['definition' => 'VARCHAR(120) NULL', 'after' => 'customer_id'],
+        'customer_email_snapshot' => ['definition' => 'VARCHAR(160) NULL', 'after' => 'customer_name_snapshot'],
+        'customer_phone_snapshot' => ['definition' => 'VARCHAR(30) NULL', 'after' => 'customer_email_snapshot'],
+    ];
+    $placeholders = implode(',', array_fill(0, count($columns), '?'));
+    $stmt = db()->prepare(
+        "SELECT COLUMN_NAME
+         FROM INFORMATION_SCHEMA.COLUMNS
+         WHERE TABLE_SCHEMA = DATABASE()
+           AND TABLE_NAME = 'bookings'
+           AND COLUMN_NAME IN ({$placeholders})"
+    );
+    $stmt->execute(array_keys($columns));
+    $existingColumns = array_flip($stmt->fetchAll(PDO::FETCH_COLUMN));
+
+    foreach ($columns as $column => $config) {
+        if (!isset($existingColumns[$column])) {
+            db()->exec("ALTER TABLE bookings ADD COLUMN {$column} {$config['definition']} AFTER {$config['after']}");
+        }
+    }
+
+    db()->exec(
+        'UPDATE bookings b
+         JOIN customers c ON c.id = b.customer_id
+         LEFT JOIN (
+             SELECT booking_id, MIN(id) AS first_email_id
+             FROM email_logs
+             WHERE body LIKE "Hi %,%"
+             GROUP BY booking_id
+         ) first_email ON first_email.booking_id = b.id
+         LEFT JOIN email_logs e ON e.id = first_email.first_email_id
+         SET b.customer_name_snapshot = COALESCE(
+                 NULLIF(b.customer_name_snapshot, ""),
+                 NULLIF(TRIM(SUBSTRING_INDEX(SUBSTRING(e.body, 4), ",", 1)), ""),
+                 c.name
+             ),
+             b.customer_email_snapshot = COALESCE(NULLIF(b.customer_email_snapshot, ""), e.recipient_email, c.email),
+             b.customer_phone_snapshot = COALESCE(NULLIF(b.customer_phone_snapshot, ""), c.phone)
+         WHERE b.customer_name_snapshot IS NULL
+            OR b.customer_name_snapshot = ""
+            OR b.customer_email_snapshot IS NULL
+            OR b.customer_email_snapshot = ""
+            OR b.customer_phone_snapshot IS NULL
+            OR b.customer_phone_snapshot = ""'
+    );
+
+    $checked = true;
+}
+
+function ensure_online_booking_blocks_table(): void
+{
+    static $checked = false;
+    if ($checked) {
+        return;
+    }
+
+    db()->exec(
+        'CREATE TABLE IF NOT EXISTS online_booking_blocks (
+            block_date DATE NOT NULL PRIMARY KEY,
+            created_by_user_id INT NULL,
+            created_at DATETIME NOT NULL,
+            updated_at DATETIME NOT NULL
+        ) ENGINE=InnoDB'
+    );
+
+    $checked = true;
+}
+
+function validate_date_value(string $date): void
+{
+    $dateObj = DateTime::createFromFormat('Y-m-d', $date);
+    if (!$dateObj || $dateObj->format('Y-m-d') !== $date) {
+        fail('Please choose a valid date.', 422, ['date' => $date]);
+    }
+}
+
+function fetch_online_booking_blocks(): array
+{
+    ensure_online_booking_blocks_table();
+
+    return db()->query(
+        'SELECT block_date, created_by_user_id, created_at, updated_at
+         FROM online_booking_blocks
+         ORDER BY block_date ASC'
+    )->fetchAll();
+}
+
+function online_booking_block_dates(): array
+{
+    return array_map(static fn (array $row) => (string) $row['block_date'], fetch_online_booking_blocks());
+}
+
+function online_booking_blocked(string $date): bool
+{
+    validate_date_value($date);
+    ensure_online_booking_blocks_table();
+
+    return scalar_query('SELECT COUNT(*) FROM online_booking_blocks WHERE block_date = ?', [$date]) > 0;
+}
+
+function require_online_booking_date_available(string $date): void
+{
+    if (online_booking_blocked($date)) {
+        fail('Online bookings are turned off for this date.', 403, ['date' => $date]);
+    }
+}
+
 function find_or_create_customer(array $data): int
 {
     $email = strtolower(clean_string($data['email']));
@@ -277,9 +471,6 @@ function find_or_create_customer(array $data): int
     $existingId = $stmt->fetchColumn();
 
     if ($existingId !== false) {
-        $update = db()->prepare('UPDATE customers SET name = :name, phone = :phone, updated_at = NOW() WHERE id = :id');
-        $update->execute(['name' => $name, 'phone' => $phone, 'id' => $existingId]);
-
         return (int) $existingId;
     }
 
@@ -705,6 +896,10 @@ function create_table_booking(array $data, ?array $manager = null): array
     validate_email_address($email);
     validate_phone_number($phone);
 
+    if ($manager === null) {
+        require_online_booking_date_available($date);
+    }
+
     if ($guestCount < $minGuests) {
         fail("Online bookings are for groups of {$minGuests} or more. Smaller groups are welcome to walk in.", 422);
     }
@@ -713,7 +908,7 @@ function create_table_booking(array $data, ?array $manager = null): array
         fail("Groups over {$maxGuests} guests should use the function request form.", 422);
     }
 
-    [$startTime, $endTime] = validate_booking_window($date, $time, $durationMinutes);
+    [$startTime, $endTime] = validate_booking_window($date, $time, $durationMinutes, $manager === null);
     $recommendation = $manager
         ? manual_table_assignment(normalized_table_ids($data['table_ids'] ?? []), $guestCount, $date, $startTime, $endTime)
         : recommend_tables($guestCount, $date, $startTime, $endTime, $preferredAreaId);
@@ -722,15 +917,20 @@ function create_table_booking(array $data, ?array $manager = null): array
 
     $stmt = db()->prepare(
         'INSERT INTO bookings
-            (booking_reference, booking_type, status, customer_id, guest_count, booking_date, start_time, end_time,
-             preferred_area_id, assigned_area_id, notes, staff_notes, created_by_user_id, updated_by_user_id, created_at, updated_at)
+            (booking_reference, booking_type, status, customer_id, customer_name_snapshot, customer_email_snapshot,
+             customer_phone_snapshot, guest_count, booking_date, start_time, end_time, preferred_area_id,
+             assigned_area_id, notes, staff_notes, created_by_user_id, updated_by_user_id, created_at, updated_at)
          VALUES
-            (:reference, "table", "confirmed", :customer_id, :guest_count, :booking_date, :start_time, :end_time,
-             :preferred_area_id, :assigned_area_id, :notes, :staff_notes, :created_by_user_id, :updated_by_user_id, NOW(), NOW())'
+            (:reference, "table", "confirmed", :customer_id, :customer_name, :customer_email, :customer_phone,
+             :guest_count, :booking_date, :start_time, :end_time, :preferred_area_id, :assigned_area_id, :notes,
+             :staff_notes, :created_by_user_id, :updated_by_user_id, NOW(), NOW())'
     );
     $stmt->execute([
         'reference' => $reference,
         'customer_id' => $customerId,
+        'customer_name' => $name,
+        'customer_email' => $email,
+        'customer_phone' => $phone,
         'guest_count' => $guestCount,
         'booking_date' => $date,
         'start_time' => $startTime,
@@ -780,26 +980,31 @@ function create_function_request(array $data): array
 
     validate_email_address($email);
     validate_phone_number($phone);
+    require_online_booking_date_available($date);
 
     if ($guestCount < 8) {
         fail('Function requests must be for at least 8 guests.', 422);
     }
 
-    [$startTime, $endTime] = validate_booking_window($date, $time, $durationMinutes);
+    [$startTime, $endTime] = validate_booking_window($date, $time, $durationMinutes, true);
     $customerId = find_or_create_customer(['name' => $name, 'email' => $email, 'phone' => $phone]);
     $reference = booking_reference();
 
     $stmt = db()->prepare(
         'INSERT INTO bookings
-            (booking_reference, booking_type, status, customer_id, guest_count, booking_date, start_time, end_time,
-             preferred_area_id, notes, event_type, created_at, updated_at)
+            (booking_reference, booking_type, status, customer_id, customer_name_snapshot, customer_email_snapshot,
+             customer_phone_snapshot, guest_count, booking_date, start_time, end_time, preferred_area_id, notes,
+             event_type, created_at, updated_at)
          VALUES
-            (:reference, "function", "pending", :customer_id, :guest_count, :booking_date, :start_time, :end_time,
-             :preferred_area_id, :notes, :event_type, NOW(), NOW())'
+            (:reference, "function", "pending", :customer_id, :customer_name, :customer_email, :customer_phone,
+             :guest_count, :booking_date, :start_time, :end_time, :preferred_area_id, :notes, :event_type, NOW(), NOW())'
     );
     $stmt->execute([
         'reference' => $reference,
         'customer_id' => $customerId,
+        'customer_name' => $name,
+        'customer_email' => $email,
+        'customer_phone' => $phone,
         'guest_count' => $guestCount,
         'booking_date' => $date,
         'start_time' => $startTime,
@@ -868,18 +1073,22 @@ function create_manager_function_booking(array $data, array $manager): array
 
     $stmt = db()->prepare(
         'INSERT INTO bookings
-            (booking_reference, booking_type, status, customer_id, guest_count, booking_date, start_time, end_time,
-             assigned_area_id, notes, staff_notes, event_type, manager_message, created_by_user_id, updated_by_user_id,
-             created_at, updated_at)
+            (booking_reference, booking_type, status, customer_id, customer_name_snapshot, customer_email_snapshot,
+             customer_phone_snapshot, guest_count, booking_date, start_time, end_time, assigned_area_id, notes,
+             staff_notes, event_type, manager_message, created_by_user_id, updated_by_user_id, created_at, updated_at)
          VALUES
-            (:reference, "function", :status, :customer_id, :guest_count, :booking_date, :start_time, :end_time,
-             :assigned_area_id, :notes, :staff_notes, :event_type, :manager_message, :created_by_user_id,
+            (:reference, "function", :status, :customer_id, :customer_name, :customer_email, :customer_phone,
+             :guest_count, :booking_date, :start_time, :end_time, :assigned_area_id, :notes, :staff_notes,
+             :event_type, :manager_message, :created_by_user_id,
              :updated_by_user_id, NOW(), NOW())'
     );
     $stmt->execute([
         'reference' => $reference,
         'status' => $status,
         'customer_id' => $customerId,
+        'customer_name' => $name,
+        'customer_email' => $email,
+        'customer_phone' => $phone,
         'guest_count' => $guestCount,
         'booking_date' => $date,
         'start_time' => $startTime,
@@ -919,7 +1128,10 @@ function booking_select_sql(?string $type): string
     $typeWhere = $type === null ? 'WHERE 1 = 1' : 'WHERE b.booking_type = :type';
 
     return
-        'SELECT b.*, c.name AS customer_name, c.email AS customer_email, c.phone AS customer_phone,
+        'SELECT b.*,
+                COALESCE(NULLIF(b.customer_name_snapshot, ""), c.name) AS customer_name,
+                COALESCE(NULLIF(b.customer_email_snapshot, ""), c.email) AS customer_email,
+                COALESCE(NULLIF(b.customer_phone_snapshot, ""), c.phone) AS customer_phone,
                 preferred.name AS preferred_area_name, assigned.name AS assigned_area_name,
                 (
                     SELECT GROUP_CONCAT(a.id ORDER BY a.sort_order, a.id SEPARATOR ",")
@@ -992,7 +1204,12 @@ function list_bookings(?string $type): void
     }
 
     if (!empty($_GET['search'])) {
-        $where .= ' AND (b.booking_reference LIKE :search OR c.name LIKE :search OR c.email LIKE :search OR c.phone LIKE :search)';
+        $where .= ' AND (
+            b.booking_reference LIKE :search
+            OR COALESCE(NULLIF(b.customer_name_snapshot, ""), c.name) LIKE :search
+            OR COALESCE(NULLIF(b.customer_email_snapshot, ""), c.email) LIKE :search
+            OR COALESCE(NULLIF(b.customer_phone_snapshot, ""), c.phone) LIKE :search
+        )';
         $params['search'] = '%' . clean_string($_GET['search']) . '%';
     }
 
@@ -1060,8 +1277,9 @@ function update_booking(int $bookingId, array $data, array $manager): array
         ? clean_string($data['time'])
         : substr((string) $existing['start_time'], 0, 5);
     $durationMinutes = (int) setting('default_duration_minutes', '120');
-
-    if ((string) $existing['booking_type'] === 'function') {
+    if ((string) $existing['booking_type'] === 'function' && array_key_exists('duration_minutes', $data)) {
+        $durationMinutes = max((int) $data['duration_minutes'], 120);
+    } elseif ((string) $existing['booking_type'] === 'function') {
         $durationMinutes = max((minutes_from_time(substr((string) $existing['end_time'], 0, 5)) - minutes_from_time(substr((string) $existing['start_time'], 0, 5))), 120);
     }
 
@@ -1075,20 +1293,21 @@ function update_booking(int $bookingId, array $data, array $manager): array
         }
     }
 
+    $customerSnapshotUpdate = null;
     if (array_key_exists('name', $data) || array_key_exists('email', $data) || array_key_exists('phone', $data)) {
         $customerName = clean_string($data['name'] ?? $existing['customer_name']);
         $customerEmail = strtolower(clean_string($data['email'] ?? $existing['customer_email']));
         $customerPhone = clean_string($data['phone'] ?? $existing['customer_phone']);
+        require_fields(['name' => $customerName, 'email' => $customerEmail, 'phone' => $customerPhone], ['name', 'email', 'phone']);
         validate_email_address($customerEmail);
         validate_phone_number($customerPhone);
 
-        $customerStmt = db()->prepare('UPDATE customers SET name = :name, email = :email, phone = :phone, updated_at = NOW() WHERE id = :id');
-        $customerStmt->execute([
+        $customerSnapshotUpdate = [
+            'customer_id' => find_or_create_customer(['name' => $customerName, 'email' => $customerEmail, 'phone' => $customerPhone]),
             'name' => $customerName,
             'email' => $customerEmail,
             'phone' => $customerPhone,
-            'id' => (int) $existing['customer_id'],
-        ]);
+        ];
     }
 
     $hasManualTableIds = array_key_exists('table_ids', $data);
@@ -1138,6 +1357,16 @@ function update_booking(int $bookingId, array $data, array $manager): array
     if ($status !== '') {
         $updates[] = 'status = :status';
         $params['status'] = $status;
+    }
+    if ($customerSnapshotUpdate !== null) {
+        $updates[] = 'customer_id = :customer_id';
+        $updates[] = 'customer_name_snapshot = :customer_name_snapshot';
+        $updates[] = 'customer_email_snapshot = :customer_email_snapshot';
+        $updates[] = 'customer_phone_snapshot = :customer_phone_snapshot';
+        $params['customer_id'] = $customerSnapshotUpdate['customer_id'];
+        $params['customer_name_snapshot'] = $customerSnapshotUpdate['name'];
+        $params['customer_email_snapshot'] = $customerSnapshotUpdate['email'];
+        $params['customer_phone_snapshot'] = $customerSnapshotUpdate['phone'];
     }
     if (array_key_exists('manager_message', $data)) {
         $updates[] = 'manager_message = :manager_message';
@@ -1211,7 +1440,10 @@ function update_booking(int $bookingId, array $data, array $manager): array
 function fetch_booking(int $bookingId): ?array
 {
     $sql =
-        'SELECT b.*, c.name AS customer_name, c.email AS customer_email, c.phone AS customer_phone,
+        'SELECT b.*,
+                COALESCE(NULLIF(b.customer_name_snapshot, ""), c.name) AS customer_name,
+                COALESCE(NULLIF(b.customer_email_snapshot, ""), c.email) AS customer_email,
+                COALESCE(NULLIF(b.customer_phone_snapshot, ""), c.phone) AS customer_phone,
                 preferred.name AS preferred_area_name, assigned.name AS assigned_area_name,
                 (
                     SELECT GROUP_CONCAT(a.id ORDER BY a.sort_order, a.id SEPARATOR ",")
@@ -1252,16 +1484,24 @@ function fetch_booking(int $bookingId): ?array
 
 function meta_payload(): array
 {
-    $settings = [];
+    $settings = settings_defaults();
+    $storedSettings = [];
     foreach (db()->query('SELECT setting_key, setting_value FROM settings ORDER BY setting_key')->fetchAll() as $row) {
+        $storedSettings[$row['setting_key']] = $row['setting_value'];
         $settings[$row['setting_key']] = $row['setting_value'];
     }
+
+    if (!array_key_exists('annual_closed_days', $storedSettings)) {
+        $settings['annual_closed_days'] = $storedSettings['annual_closed_day'] ?? $settings['annual_closed_day'];
+    }
+    $settings['venue_image_url'] = public_asset_url($settings['venue_image_url'] ?? '');
 
     return [
         'areas' => db()->query('SELECT id, code, name, function_enabled, active FROM areas WHERE active = 1 ORDER BY sort_order, id')->fetchAll(),
         'function_areas' => db()->query('SELECT id, code, name FROM areas WHERE active = 1 AND function_enabled = 1 ORDER BY sort_order, id')->fetchAll(),
         'settings' => $settings,
         'opening_hours' => db()->query('SELECT day_of_week, opens_at, closes_at, is_closed FROM opening_hours ORDER BY day_of_week')->fetchAll(),
+        'online_booking_blocks' => fetch_online_booking_blocks(),
     ];
 }
 
@@ -1280,7 +1520,8 @@ function dashboard_payload(): array
 
     $recent = db()->query(
         'SELECT b.id, b.booking_reference, b.booking_type, b.status, b.booking_date, b.start_time, b.guest_count,
-                c.name AS customer_name, a.name AS assigned_area_name
+                COALESCE(NULLIF(b.customer_name_snapshot, ""), c.name) AS customer_name,
+                a.name AS assigned_area_name
          FROM bookings b
          JOIN customers c ON c.id = b.customer_id
          LEFT JOIN areas a ON a.id = b.assigned_area_id
@@ -1306,7 +1547,8 @@ function dashboard_payload(): array
 
     $upcoming = db()->query(
         'SELECT b.id, b.booking_reference, b.booking_type, b.status, b.booking_date, b.start_time, b.guest_count,
-                c.name AS customer_name, a.name AS assigned_area_name
+                COALESCE(NULLIF(b.customer_name_snapshot, ""), c.name) AS customer_name,
+                a.name AS assigned_area_name
          FROM bookings b
          JOIN customers c ON c.id = b.customer_id
          LEFT JOIN areas a ON a.id = b.assigned_area_id
@@ -1340,6 +1582,64 @@ function scalar_query(string $sql, array $params): int
     $stmt->execute($params);
 
     return (int) $stmt->fetchColumn();
+}
+
+function save_setting_value(string $key, string $value): void
+{
+    $stmt = db()->prepare(
+        'INSERT INTO settings (setting_key, setting_value, updated_at)
+         VALUES (:setting_key, :setting_value, NOW())
+         ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value), updated_at = NOW()'
+    );
+    $stmt->execute(['setting_key' => clean_string($key), 'setting_value' => clean_string($value)]);
+}
+
+function upload_venue_image(array $manager): array
+{
+    if (empty($_FILES['image']) || !is_array($_FILES['image'])) {
+        fail('Please choose an image to upload.', 422);
+    }
+
+    $file = $_FILES['image'];
+    if (($file['error'] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_OK) {
+        fail('Image upload failed.', 422, ['upload_error' => $file['error'] ?? null]);
+    }
+
+    if (($file['size'] ?? 0) > 5 * 1024 * 1024) {
+        fail('Image must be 5 MB or smaller.', 422);
+    }
+
+    $tmpPath = (string) ($file['tmp_name'] ?? '');
+    $finfo = new finfo(FILEINFO_MIME_TYPE);
+    $mimeType = $finfo->file($tmpPath) ?: '';
+    $extensions = [
+        'image/jpeg' => 'jpg',
+        'image/png' => 'png',
+        'image/webp' => 'webp',
+        'image/gif' => 'gif',
+    ];
+
+    if (!isset($extensions[$mimeType])) {
+        fail('Please upload a JPG, PNG, WebP, or GIF image.', 422, ['mime_type' => $mimeType]);
+    }
+
+    $uploadDir = __DIR__ . '/uploads/venue';
+    if (!is_dir($uploadDir) && !mkdir($uploadDir, 0775, true) && !is_dir($uploadDir)) {
+        fail('Venue image folder could not be created.', 500);
+    }
+
+    $filename = 'venue-' . date('Ymd-His') . '-' . bin2hex(random_bytes(4)) . '.' . $extensions[$mimeType];
+    $destination = $uploadDir . '/' . $filename;
+
+    if (!move_uploaded_file($tmpPath, $destination)) {
+        fail('Venue image could not be saved.', 500);
+    }
+
+    $url = public_asset_url('uploads/venue/' . $filename);
+    save_setting_value('venue_image_url', $url);
+    log_activity((int) $manager['id'], 'updated', 'settings', null, ['venue_image_url' => $url]);
+
+    return ['url' => $url];
 }
 
 function area_code_from_name(string $name): string
@@ -1407,6 +1707,9 @@ function sync_area_table_range(int $areaId): void
 }
 
 try {
+    ensure_booking_customer_snapshots();
+    ensure_online_booking_blocks_table();
+
     $method = $_SERVER['REQUEST_METHOD'];
     $route = trim((string) ($_GET['r'] ?? 'meta'), '/');
     $segments = $route === '' ? [] : explode('/', $route);
@@ -1447,6 +1750,9 @@ try {
     }
 
     if ($method === 'POST' && $route === 'public/table-bookings') {
+        if (!setting_enabled('online_table_bookings_enabled')) {
+            fail('Online table bookings are currently turned off.', 403);
+        }
         db()->beginTransaction();
         $result = create_table_booking(json_body());
         db()->commit();
@@ -1454,6 +1760,9 @@ try {
     }
 
     if ($method === 'POST' && $route === 'public/function-requests') {
+        if (!setting_enabled('online_function_requests_enabled')) {
+            fail('Online function requests are currently turned off.', 403);
+        }
         db()->beginTransaction();
         $result = create_function_request(json_body());
         db()->commit();
@@ -1509,6 +1818,39 @@ try {
         respond(['item' => $result]);
     }
 
+    if ($method === 'GET' && $route === 'online-booking-blocks') {
+        require_manager();
+        respond(['items' => fetch_online_booking_blocks()]);
+    }
+
+    if ($method === 'POST' && $route === 'online-booking-blocks') {
+        $manager = require_manager();
+        $data = json_body();
+        $date = clean_string($data['date'] ?? '');
+        validate_date_value($date);
+
+        $stmt = db()->prepare(
+            'INSERT INTO online_booking_blocks (block_date, created_by_user_id, created_at, updated_at)
+             VALUES (:block_date, :created_by_user_id, NOW(), NOW())
+             ON DUPLICATE KEY UPDATE created_by_user_id = VALUES(created_by_user_id), updated_at = NOW()'
+        );
+        $stmt->execute([
+            'block_date' => $date,
+            'created_by_user_id' => (int) $manager['id'],
+        ]);
+        log_activity((int) $manager['id'], 'blocked_online_bookings', 'date', null, ['date' => $date]);
+        respond(['item' => ['block_date' => $date]]);
+    }
+
+    if (($segments[0] ?? '') === 'online-booking-blocks' && isset($segments[1]) && $method === 'DELETE') {
+        $manager = require_manager();
+        $date = clean_string($segments[1]);
+        validate_date_value($date);
+        db()->prepare('DELETE FROM online_booking_blocks WHERE block_date = :block_date')->execute(['block_date' => $date]);
+        log_activity((int) $manager['id'], 'unblocked_online_bookings', 'date', null, ['date' => $date]);
+        respond(['ok' => true]);
+    }
+
     if ($method === 'GET' && $route === 'calendar') {
         require_manager();
         $stmt = db()->query(
@@ -1516,7 +1858,7 @@ try {
             ' AND b.status NOT IN ("cancelled", "declined", "no_show")
              ORDER BY b.booking_date, b.start_time'
         );
-        respond(['items' => $stmt->fetchAll()]);
+        respond(['items' => $stmt->fetchAll(), 'online_booking_blocks' => fetch_online_booking_blocks()]);
     }
 
     if ($method === 'GET' && $route === 'tables') {
@@ -1690,7 +2032,9 @@ try {
     if ($method === 'GET' && $route === 'ai-logs') {
         require_manager();
         $items = db()->query(
-            'SELECT l.*, b.booking_reference, b.booking_date, b.start_time, c.name AS customer_name, a.name AS suggested_area_name
+            'SELECT l.*, b.booking_reference, b.booking_date, b.start_time,
+                    COALESCE(NULLIF(b.customer_name_snapshot, ""), c.name) AS customer_name,
+                    a.name AS suggested_area_name
              FROM ai_assignment_logs l
              JOIN bookings b ON b.id = l.booking_id
              JOIN customers c ON c.id = b.customer_id
@@ -1753,16 +2097,43 @@ try {
     if (($segments[0] ?? '') === 'users' && isset($segments[1]) && $method === 'PUT') {
         $manager = require_manager();
         $data = json_body();
+        $targetUserId = (int) $segments[1];
+        $existingStmt = db()->prepare('SELECT id, role, status FROM users WHERE id = :id LIMIT 1');
+        $existingStmt->execute(['id' => $targetUserId]);
+        $existingUser = $existingStmt->fetch();
+        if (!$existingUser) {
+            fail('User not found.', 404);
+        }
+
         $updates = ['updated_at = NOW()'];
-        $params = ['id' => (int) $segments[1]];
+        $params = ['id' => $targetUserId];
 
         if (isset($data['name'])) {
             $updates[] = 'name = :name';
             $params['name'] = clean_string($data['name']);
         }
         if (isset($data['status'])) {
+            $nextStatus = clean_string($data['status']);
+            if (!in_array($nextStatus, ['active', 'inactive'], true)) {
+                fail('Please choose a valid user status.', 422, ['status' => $nextStatus]);
+            }
+
+            if ((string) $existingUser['role'] === 'manager' && $nextStatus === 'inactive') {
+                if ($targetUserId === (int) $manager['id']) {
+                    fail('You cannot deactivate your own manager account.', 422);
+                }
+
+                $activeManagers = scalar_query(
+                    'SELECT COUNT(*) FROM users WHERE role = "manager" AND status = "active" AND id <> ?',
+                    [$targetUserId]
+                );
+                if ($activeManagers < 1) {
+                    fail('At least one active manager is required.', 422);
+                }
+            }
+
             $updates[] = 'status = :status';
-            $params['status'] = clean_string($data['status']) === 'inactive' ? 'inactive' : 'active';
+            $params['status'] = $nextStatus;
         }
         if (!empty($data['password'])) {
             $updates[] = 'password_hash = :password_hash';
@@ -1771,7 +2142,19 @@ try {
 
         $stmt = db()->prepare('UPDATE users SET ' . implode(', ', $updates) . ' WHERE id = :id');
         $stmt->execute($params);
-        log_activity((int) $manager['id'], 'updated', 'user', (int) $segments[1]);
+        log_activity((int) $manager['id'], 'updated', 'user', $targetUserId);
+        respond(['ok' => true]);
+    }
+
+    if ($method === 'POST' && $route === 'settings/venue-image') {
+        $manager = require_manager();
+        respond(upload_venue_image($manager), 201);
+    }
+
+    if ($method === 'DELETE' && $route === 'settings/venue-image') {
+        $manager = require_manager();
+        save_setting_value('venue_image_url', '');
+        log_activity((int) $manager['id'], 'updated', 'settings', null, ['venue_image_url' => '']);
         respond(['ok' => true]);
     }
 
@@ -1785,14 +2168,8 @@ try {
         $data = json_body();
 
         if (!empty($data['settings']) && is_array($data['settings'])) {
-            $stmt = db()->prepare(
-                'INSERT INTO settings (setting_key, setting_value, updated_at)
-                 VALUES (:setting_key, :setting_value, NOW())
-                 ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value), updated_at = NOW()'
-            );
-
             foreach ($data['settings'] as $key => $value) {
-                $stmt->execute(['setting_key' => clean_string($key), 'setting_value' => clean_string($value)]);
+                save_setting_value(clean_string($key), clean_string($value));
             }
         }
 

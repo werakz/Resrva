@@ -553,6 +553,28 @@ span.flatpickr-weekday,
   width: 100%;
 }
 
+.tables-areas-layout {
+  display: grid;
+  gap: 1.5rem;
+}
+
+.tables-areas-list {
+  display: grid;
+  gap: 1rem;
+}
+
+@media (min-width: 1024px) {
+  .tables-areas-layout {
+    align-items: start;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 420px;
+  }
+
+  .tables-areas-list {
+    grid-column: span 2 / span 2;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
 @media (max-width: 639px) {
   .flatpickr-calendar.static {
     left: auto !important;

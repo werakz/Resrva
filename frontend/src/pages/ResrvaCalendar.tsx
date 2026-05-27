@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
-import { ChevronLeft, ChevronRight, Users } from "lucide-react";
-import { apiFetch } from "../lib/api";
-import type { Area, Booking, TableRecord } from "../types";
+import { Ban, ChevronLeft, ChevronRight, Users } from "lucide-react";
+import { apiFetch, toJsonBody } from "../lib/api";
+import type { Area, Booking, OnlineBookingBlock, TableRecord } from "../types";
 import { LoadingState } from "../components/resrva/LoadingState";
 import { StatusBadge } from "../components/resrva/StatusBadge";
 import { Modal } from "../components/ui/modal";
@@ -9,6 +9,11 @@ import { Modal } from "../components/ui/modal";
 type TablesPayload = {
   areas: Area[];
   tables: TableRecord[];
+};
+
+type CalendarPayload = {
+  items: Booking[];
+  online_booking_blocks?: OnlineBookingBlock[];
 };
 
 type DayStats = {
@@ -156,14 +161,17 @@ export default function ResrvaCalendar() {
   const [currentMonth, setCurrentMonth] = useState(() => startOfMonth(new Date()));
   const [selectedDate, setSelectedDate] = useState(() => toIsoDate(new Date()));
   const [mealFilter, setMealFilter] = useState<MealFilter>("all");
+  const [onlineBookingBlocks, setOnlineBookingBlocks] = useState<string[]>([]);
   const [error, setError] = useState("");
+  const [detailsMessage, setDetailsMessage] = useState("");
   const [detailsOpen, setDetailsOpen] = useState(false);
 
   const loadCalendar = () => {
     setError("");
-    Promise.all([apiFetch<{ items: Booking[] }>("calendar"), apiFetch<TablesPayload>("tables")])
+    Promise.all([apiFetch<CalendarPayload>("calendar"), apiFetch<TablesPayload>("tables")])
       .then(([calendarPayload, tablesPayload]) => {
         setItems(calendarPayload.items);
+        setOnlineBookingBlocks((calendarPayload.online_booking_blocks || []).map((block) => block.block_date));
         setTablesData(tablesPayload);
       })
       .catch((err) => setError(err instanceof Error ? err.message : "Calendar failed to load."));
@@ -215,6 +223,7 @@ export default function ResrvaCalendar() {
   }, [dailyCapacity, filteredItems]);
 
   const visibleDays = useMemo(() => calendarDays(currentMonth), [currentMonth]);
+  const onlineBookingBlockSet = useMemo(() => new Set(onlineBookingBlocks), [onlineBookingBlocks]);
   const selectedBookings = useMemo(() => {
     return (statsByDate.get(selectedDate)?.bookings || [])
       .slice()
@@ -233,7 +242,31 @@ export default function ResrvaCalendar() {
 
   const openDateDetails = (date: string) => {
     setSelectedDate(date);
+    setDetailsMessage("");
     setDetailsOpen(true);
+  };
+
+  const toggleOnlineBookingBlock = async (date: string) => {
+    const isBlocked = onlineBookingBlockSet.has(date);
+    setDetailsMessage("");
+
+    try {
+      if (isBlocked) {
+        await apiFetch<{ ok: boolean }>(`online-booking-blocks/${date}`, { method: "DELETE" });
+        setOnlineBookingBlocks((current) => current.filter((blockedDate) => blockedDate !== date));
+        setDetailsMessage("Online bookings are open for this date.");
+        return;
+      }
+
+      await apiFetch<{ item: OnlineBookingBlock }>("online-booking-blocks", {
+        method: "POST",
+        ...toJsonBody({ date }),
+      });
+      setOnlineBookingBlocks((current) => Array.from(new Set([...current, date])).sort());
+      setDetailsMessage("Online bookings are off for this date.");
+    } catch (err) {
+      setDetailsMessage(err instanceof Error ? err.message : "Could not update online booking status.");
+    }
   };
 
   if (error) {
@@ -326,6 +359,7 @@ export default function ResrvaCalendar() {
                   const style = loadStyle(stats.load);
                   const barWidth = `${Math.min(stats.load, 100)}%`;
                   const hasFunction = stats.bookings.some((booking) => booking.booking_type === "function");
+                  const isOnlineBlocked = onlineBookingBlockSet.has(iso);
 
                   return (
                     <button
@@ -346,6 +380,14 @@ export default function ResrvaCalendar() {
                             title="Function"
                           >
                             Function
+                          </span>
+                        ) : null}
+                        {isOnlineBlocked ? (
+                          <span
+                            className="rounded-md bg-error-50 px-1.5 py-0.5 text-[10px] font-semibold text-error-600 dark:bg-error-500/15 dark:text-error-400"
+                            title="Online bookings off"
+                          >
+                            Off
                           </span>
                         ) : null}
                       </div>
@@ -376,14 +418,39 @@ export default function ResrvaCalendar() {
 
       <Modal isOpen={detailsOpen} onClose={() => setDetailsOpen(false)} className="m-4 max-w-[900px]">
         <div className="p-5 sm:p-6">
-          <div className="pr-12">
-            <p className="text-lg font-semibold text-gray-900 dark:text-white/90">
-              {displayDate(selectedDate)}
-            </p>
-            <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
-              {pluralize(selectedBookings.length, "booking")} · {pluralize(selectedGuestCount, "guest")}
-            </p>
+          <div className="flex flex-col gap-4 pr-12 sm:flex-row sm:items-start sm:justify-between">
+            <div>
+              <p className="text-lg font-semibold text-gray-900 dark:text-white/90">
+                {displayDate(selectedDate)}
+              </p>
+              <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
+                {pluralize(selectedBookings.length, "booking")} · {pluralize(selectedGuestCount, "guest")}
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => toggleOnlineBookingBlock(selectedDate)}
+              className={`inline-flex h-10 items-center justify-center gap-2 rounded-lg px-4 text-sm font-medium shadow-theme-xs ${
+                onlineBookingBlockSet.has(selectedDate)
+                  ? "border border-gray-300 bg-white text-gray-700 hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-300"
+                  : "bg-error-600 text-white hover:bg-error-700"
+              }`}
+            >
+              <Ban className="size-4" />
+              {onlineBookingBlockSet.has(selectedDate) ? "Turn online bookings on" : "Turn online bookings off"}
+            </button>
           </div>
+
+          {onlineBookingBlockSet.has(selectedDate) ? (
+            <div className="mt-4 rounded-lg border border-error-200 bg-error-50 px-4 py-3 text-sm font-medium text-error-700 dark:border-error-500/20 dark:bg-error-500/15 dark:text-error-300">
+              Online bookings are off for this date.
+            </div>
+          ) : null}
+          {detailsMessage ? (
+            <div className="mt-4 rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-sm font-medium text-gray-700 dark:border-gray-800 dark:bg-white/[0.03] dark:text-gray-300">
+              {detailsMessage}
+            </div>
+          ) : null}
 
           <div className="mt-5 max-h-[68vh] overflow-y-auto rounded-xl border border-gray-200 dark:border-gray-800">
             {selectedBookings.length === 0 ? (

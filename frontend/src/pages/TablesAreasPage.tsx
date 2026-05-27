@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
-import { Plus, RefreshCw, Save, Trash2 } from "lucide-react";
+import { Plus, Save, Trash2 } from "lucide-react";
 import { apiFetch, toJsonBody } from "../lib/api";
 import type { Area, TableRecord } from "../types";
-import { FieldLabel, FormMessage, inputClass, selectClass } from "../components/resrva/FormField";
+import { FieldLabel, FormMessage, SelectInput, inputClass } from "../components/resrva/FormField";
 import { LoadingState } from "../components/resrva/LoadingState";
 import { PageHeader } from "../components/resrva/PageHeader";
+import { Modal } from "../components/ui/modal";
 
 type TablesPayload = {
   areas: Area[];
@@ -58,10 +59,26 @@ export default function TablesAreasPage() {
   const [selectedAreaId, setSelectedAreaId] = useState("");
   const [tableForm, setTableForm] = useState<TableForm>(emptyTableForm);
   const [areaForm, setAreaForm] = useState<AreaForm>(emptyAreaForm);
+  const [newTableForm, setNewTableForm] = useState<TableForm>(emptyTableForm);
+  const [newAreaForm, setNewAreaForm] = useState<AreaForm>(emptyAreaForm);
+  const [isTableModalOpen, setTableModalOpen] = useState(false);
+  const [isAreaModalOpen, setAreaModalOpen] = useState(false);
   const [message, setMessage] = useState<{ type: "error" | "success"; text: string } | null>(null);
 
   const activeAreas = useMemo(() => (data?.areas || []).filter((area) => isActive(area.active)), [data]);
   const visibleTables = useMemo(() => data?.tables || [], [data]);
+  const areaOptions = useMemo(
+    () => activeAreas.map((area) => ({ value: String(area.id), label: area.name })),
+    [activeAreas],
+  );
+  const activeOptions = [
+    { value: "1", label: "Active" },
+    { value: "0", label: "Inactive" },
+  ];
+  const yesNoOptions = [
+    { value: "0", label: "No" },
+    { value: "1", label: "Yes" },
+  ];
 
   const loadTables = async () => {
     const payload = await apiFetch<TablesPayload>("tables");
@@ -93,11 +110,6 @@ export default function TablesAreasPage() {
     return activeAreas.find((area) => String(area.id) === selectedAreaId) || null;
   }, [activeAreas, selectedAreaId]);
 
-  const activeTables = useMemo(
-    () => visibleTables.filter((table) => isActive(table.active)).length,
-    [visibleTables],
-  );
-
   useEffect(() => {
     if (!selectedTable) return;
     setTableForm({
@@ -122,23 +134,29 @@ export default function TablesAreasPage() {
     setMessage({ type: "error", text: err instanceof Error ? err.message : fallback });
   };
 
-  const newTable = (areaId = "") => {
-    setSelectedTableId("");
-    setTableForm({
+  const nextAreaSortOrder = () => {
+    const lastOrder = activeAreas[activeAreas.length - 1]?.sort_order;
+    return String((lastOrder ?? activeAreas.length * 10) + 10);
+  };
+
+  const openNewTableModal = (areaId = "") => {
+    setNewTableForm({
       ...emptyTableForm,
       area_id: areaId || String(activeAreas[0]?.id || ""),
     });
+    setTableModalOpen(true);
   };
 
-  const newArea = () => {
-    setSelectedAreaId("");
-    setAreaForm({
+  const openNewAreaModal = () => {
+    setNewAreaForm({
       ...emptyAreaForm,
-      sort_order: String(((activeAreas[activeAreas.length - 1]?.sort_order || activeAreas.length * 10) ?? 0) + 10),
+      sort_order: nextAreaSortOrder(),
     });
+    setAreaModalOpen(true);
   };
 
   const saveTable = async () => {
+    if (!selectedTable) return;
     if (!tableForm.area_id || !tableForm.table_number) {
       setMessage({ type: "error", text: "Choose an area and table number." });
       return;
@@ -152,23 +170,41 @@ export default function TablesAreasPage() {
     };
 
     try {
-      if (selectedTable) {
-        await apiFetch<{ ok: boolean }>(`tables/${selectedTable.id}`, {
-          method: "PUT",
-          ...toJsonBody(payload),
-        });
-        setMessage({ type: "success", text: `Table ${payload.table_number} updated.` });
-      } else {
-        const result = await apiFetch<{ ok: boolean; id: number }>("tables", {
-          method: "POST",
-          ...toJsonBody(payload),
-        });
-        setSelectedTableId(String(result.id));
-        setMessage({ type: "success", text: `Table ${payload.table_number} added.` });
-      }
+      await apiFetch<{ ok: boolean }>(`tables/${selectedTable.id}`, {
+        method: "PUT",
+        ...toJsonBody(payload),
+      });
+      setMessage({ type: "success", text: `Table ${payload.table_number} updated.` });
       await loadTables();
     } catch (err) {
       showError(err, "Table could not be saved.");
+    }
+  };
+
+  const createTable = async () => {
+    if (!newTableForm.area_id || !newTableForm.table_number) {
+      setMessage({ type: "error", text: "Choose an area and table number." });
+      return;
+    }
+
+    const payload = {
+      area_id: Number(newTableForm.area_id),
+      table_number: Number(newTableForm.table_number),
+      capacity: Number(newTableForm.capacity),
+      active: newTableForm.active === "1",
+    };
+
+    try {
+      const result = await apiFetch<{ ok: boolean; id: number }>("tables", {
+        method: "POST",
+        ...toJsonBody(payload),
+      });
+      setSelectedTableId(String(result.id));
+      setTableModalOpen(false);
+      setMessage({ type: "success", text: `Table ${payload.table_number} added.` });
+      await loadTables();
+    } catch (err) {
+      showError(err, "Table could not be added.");
     }
   };
 
@@ -180,7 +216,8 @@ export default function TablesAreasPage() {
     try {
       await apiFetch<{ ok: boolean }>(`tables/${selectedTable.id}`, { method: "DELETE" });
       setMessage({ type: "success", text: `Table ${selectedTable.table_number} deleted.` });
-      newTable(String(selectedTable.area_id));
+      setSelectedTableId("");
+      setTableForm(emptyTableForm);
       await loadTables();
     } catch (err) {
       showError(err, "Table could not be deleted.");
@@ -188,6 +225,7 @@ export default function TablesAreasPage() {
   };
 
   const saveArea = async () => {
+    if (!selectedArea) return;
     if (!areaForm.name.trim()) {
       setMessage({ type: "error", text: "Section name is required." });
       return;
@@ -201,23 +239,41 @@ export default function TablesAreasPage() {
     };
 
     try {
-      if (selectedArea) {
-        await apiFetch<{ ok: boolean }>(`areas/${selectedArea.id}`, {
-          method: "PUT",
-          ...toJsonBody(payload),
-        });
-        setMessage({ type: "success", text: `${payload.name} updated.` });
-      } else {
-        const result = await apiFetch<{ ok: boolean; id: number }>("areas", {
-          method: "POST",
-          ...toJsonBody(payload),
-        });
-        setSelectedAreaId(String(result.id));
-        setMessage({ type: "success", text: `${payload.name} added.` });
-      }
+      await apiFetch<{ ok: boolean }>(`areas/${selectedArea.id}`, {
+        method: "PUT",
+        ...toJsonBody(payload),
+      });
+      setMessage({ type: "success", text: `${payload.name} updated.` });
       await loadTables();
     } catch (err) {
       showError(err, "Section could not be saved.");
+    }
+  };
+
+  const createArea = async () => {
+    if (!newAreaForm.name.trim()) {
+      setMessage({ type: "error", text: "Section name is required." });
+      return;
+    }
+
+    const payload = {
+      name: newAreaForm.name.trim(),
+      code: newAreaForm.code.trim() || codeFromName(newAreaForm.name),
+      function_enabled: newAreaForm.function_enabled === "1",
+      sort_order: Number(newAreaForm.sort_order || 0),
+    };
+
+    try {
+      const result = await apiFetch<{ ok: boolean; id: number }>("areas", {
+        method: "POST",
+        ...toJsonBody(payload),
+      });
+      setSelectedAreaId(String(result.id));
+      setAreaModalOpen(false);
+      setMessage({ type: "success", text: `${payload.name} added.` });
+      await loadTables();
+    } catch (err) {
+      showError(err, "Section could not be added.");
     }
   };
 
@@ -229,11 +285,16 @@ export default function TablesAreasPage() {
     try {
       await apiFetch<{ ok: boolean }>(`areas/${selectedArea.id}`, { method: "DELETE" });
       setMessage({ type: "success", text: `${selectedArea.name} removed.` });
-      newArea();
+      setSelectedAreaId("");
+      setAreaForm(emptyAreaForm);
       await loadTables();
     } catch (err) {
       showError(err, "Section could not be removed.");
     }
+  };
+
+  const selectArea = (areaId: number) => {
+    setSelectedAreaId(String(areaId));
   };
 
   if (!data && message?.type === "error") {
@@ -246,70 +307,41 @@ export default function TablesAreasPage() {
 
   return (
     <>
-      <PageHeader
-        title="Tables / Areas"
-        action={
-          <div className="flex flex-wrap gap-2">
-            <button
-              type="button"
-              onClick={() => newArea()}
-              className="inline-flex h-10 items-center gap-2 rounded-lg border border-gray-300 bg-white px-3 text-sm font-medium text-gray-700 shadow-theme-xs hover:bg-gray-50"
-            >
-              <Plus className="size-4" />
-              Section
-            </button>
-            <button
-              type="button"
-              onClick={() => newTable()}
-              className="inline-flex h-10 items-center gap-2 rounded-lg bg-brand-600 px-3 text-sm font-medium text-white shadow-theme-xs hover:bg-brand-700"
-            >
-              <Plus className="size-4" />
-              Table
-            </button>
-            <button
-              type="button"
-              onClick={() => loadTables().catch((err) => showError(err, "Tables failed to load."))}
-              className="inline-flex h-10 items-center gap-2 rounded-lg border border-gray-300 bg-white px-3 text-sm font-medium text-gray-700 shadow-theme-xs hover:bg-gray-50"
-            >
-              <RefreshCw className="size-4" />
-              Refresh
-            </button>
-          </div>
-        }
-      />
-
-      <div className="mb-5 grid gap-4 md:grid-cols-3">
-        <div className="rounded-lg border border-gray-200 bg-white p-4 shadow-theme-sm">
-          <p className="text-sm text-gray-500">Sections</p>
-          <p className="mt-1 text-2xl font-semibold text-gray-900">{activeAreas.length}</p>
-        </div>
-        <div className="rounded-lg border border-gray-200 bg-white p-4 shadow-theme-sm">
-          <p className="text-sm text-gray-500">Tables</p>
-          <p className="mt-1 text-2xl font-semibold text-gray-900">{visibleTables.length}</p>
-        </div>
-        <div className="rounded-lg border border-gray-200 bg-white p-4 shadow-theme-sm">
-          <p className="text-sm text-gray-500">Active</p>
-          <p className="mt-1 text-2xl font-semibold text-gray-900">{activeTables}</p>
-        </div>
-      </div>
+      <PageHeader title="Tables / Areas" />
 
       {message ? <div className="mb-5"><FormMessage type={message.type}>{message.text}</FormMessage></div> : null}
 
-      <div className="grid gap-6 xl:grid-cols-[minmax(0,1.25fr)_420px]">
-        <div className="grid gap-4 md:grid-cols-2">
+      <div className="tables-areas-layout">
+        <div className="tables-areas-list">
           {activeAreas.map((area) => {
             const tables = tablesByArea.get(area.id) || [];
             const activeCount = tables.filter((table) => isActive(table.active)).length;
 
             return (
-              <section key={area.id} className="rounded-lg border border-gray-200 bg-white p-5 shadow-theme-sm">
+              <section
+                key={area.id}
+                role="button"
+                tabIndex={0}
+                onClick={() => selectArea(area.id)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
+                    selectArea(area.id);
+                  }
+                }}
+                className={`cursor-pointer rounded-lg border bg-white p-5 shadow-theme-sm transition hover:border-brand-300 hover:shadow-theme-md ${
+                  String(area.id) === selectedAreaId
+                    ? "border-brand-500 ring-2 ring-brand-500/15"
+                    : "border-gray-200"
+                }`}
+              >
                 <div className="flex items-start justify-between gap-3">
-                  <button type="button" className="min-w-0 text-left" onClick={() => setSelectedAreaId(String(area.id))}>
+                  <div className="min-w-0 text-left">
                     <h2 className="truncate text-lg font-semibold text-gray-900">{area.name}</h2>
                     <p className="mt-1 text-sm text-gray-500">
                       {tables.length ? `Tables ${tables[0].table_number}-${tables[tables.length - 1].table_number}` : "No tables yet"}
                     </p>
-                  </button>
+                  </div>
                   <span className="shrink-0 rounded-full bg-gray-100 px-2.5 py-1 text-xs font-medium text-gray-700">
                     {activeCount}/{tables.length} active
                   </span>
@@ -320,7 +352,10 @@ export default function TablesAreasPage() {
                     <button
                       key={table.id}
                       type="button"
-                      onClick={() => setSelectedTableId(String(table.id))}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        setSelectedTableId(String(table.id));
+                      }}
                       className={`flex h-9 min-w-9 items-center justify-center rounded-lg border px-2 text-xs font-medium ${
                         String(table.id) === selectedTableId
                           ? "border-brand-500 bg-brand-100 text-brand-800 ring-2 ring-brand-500/15"
@@ -335,7 +370,10 @@ export default function TablesAreasPage() {
                   ))}
                   <button
                     type="button"
-                    onClick={() => newTable(String(area.id))}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      openNewTableModal(String(area.id));
+                    }}
                     className="flex h-9 min-w-9 items-center justify-center rounded-lg border border-dashed border-gray-300 px-2 text-xs font-medium text-gray-500 hover:border-brand-300 hover:text-brand-600"
                     title={`Add table to ${area.name}`}
                   >
@@ -353,170 +391,284 @@ export default function TablesAreasPage() {
           })}
         </div>
 
-        <aside className="space-y-5">
+        <aside className="space-y-5 lg:sticky lg:top-24">
           <section className="rounded-lg border border-gray-200 bg-white p-5 shadow-theme-sm">
             <div className="flex items-center justify-between gap-3">
-              <h2 className="text-lg font-semibold text-gray-900">{selectedTable ? "Edit table" : "Add table"}</h2>
-              <button type="button" onClick={() => newTable()} className="text-sm font-medium text-brand-600 hover:text-brand-700">
-                New
+              <h2 className="text-lg font-semibold text-gray-900">Edit table</h2>
+              <button type="button" onClick={() => openNewTableModal()} className="text-sm font-medium text-brand-600 hover:text-brand-700">
+                Add table
               </button>
             </div>
 
-            <div className="mt-4 space-y-4">
-              <div>
-                <FieldLabel htmlFor="table-area">Section</FieldLabel>
-                <select
-                  id="table-area"
-                  className={selectClass}
-                  value={tableForm.area_id}
-                  onChange={(event) => setTableForm((current) => ({ ...current, area_id: event.target.value }))}
-                >
-                  <option value="">Choose a section</option>
-                  {activeAreas.map((area) => (
-                    <option key={area.id} value={area.id}>
-                      {area.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div className="grid gap-3 sm:grid-cols-2">
+            {selectedTable ? (
+              <div className="mt-4 space-y-4">
                 <div>
-                  <FieldLabel htmlFor="table-number">Table number</FieldLabel>
-                  <input
-                    id="table-number"
-                    type="number"
-                    min="1"
-                    className={inputClass}
-                    value={tableForm.table_number}
-                    onChange={(event) => setTableForm((current) => ({ ...current, table_number: event.target.value }))}
+                  <FieldLabel htmlFor="table-area">Section</FieldLabel>
+                  <SelectInput
+                    id="table-area"
+                    value={tableForm.area_id}
+                    onChange={(value) => setTableForm((current) => ({ ...current, area_id: value }))}
+                    options={[{ value: "", label: "Choose a section" }, ...areaOptions]}
                   />
                 </div>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div>
+                    <FieldLabel htmlFor="table-number">Table number</FieldLabel>
+                    <input
+                      id="table-number"
+                      type="number"
+                      min="1"
+                      className={inputClass}
+                      value={tableForm.table_number}
+                      onChange={(event) => setTableForm((current) => ({ ...current, table_number: event.target.value }))}
+                    />
+                  </div>
+                  <div>
+                    <FieldLabel htmlFor="capacity">Capacity</FieldLabel>
+                    <input
+                      id="capacity"
+                      type="number"
+                      min="1"
+                      className={inputClass}
+                      value={tableForm.capacity}
+                      onChange={(event) => setTableForm((current) => ({ ...current, capacity: event.target.value }))}
+                    />
+                  </div>
+                </div>
                 <div>
-                  <FieldLabel htmlFor="capacity">Capacity</FieldLabel>
-                  <input
-                    id="capacity"
-                    type="number"
-                    min="1"
-                    className={inputClass}
-                    value={tableForm.capacity}
-                    onChange={(event) => setTableForm((current) => ({ ...current, capacity: event.target.value }))}
+                  <FieldLabel htmlFor="active">Status</FieldLabel>
+                  <SelectInput
+                    id="active"
+                    value={tableForm.active}
+                    onChange={(value) => setTableForm((current) => ({ ...current, active: value }))}
+                    options={activeOptions}
                   />
                 </div>
-              </div>
-              <div>
-                <FieldLabel htmlFor="active">Status</FieldLabel>
-                <select
-                  id="active"
-                  className={selectClass}
-                  value={tableForm.active}
-                  onChange={(event) => setTableForm((current) => ({ ...current, active: event.target.value }))}
-                >
-                  <option value="1">Active</option>
-                  <option value="0">Inactive</option>
-                </select>
-              </div>
-              <div className="flex flex-wrap gap-2">
-                <button type="button" onClick={saveTable} className="inline-flex h-11 items-center gap-2 rounded-lg bg-brand-600 px-4 text-sm font-medium text-white hover:bg-brand-700">
-                  <Save className="size-4" />
-                  Save table
-                </button>
-                {selectedTable ? (
+                <div className="flex flex-wrap gap-2">
+                  <button type="button" onClick={saveTable} className="inline-flex h-11 items-center gap-2 rounded-lg bg-brand-600 px-4 text-sm font-medium text-white hover:bg-brand-700">
+                    <Save className="size-4" />
+                    Save table
+                  </button>
                   <button type="button" onClick={deleteTable} className="inline-flex h-11 items-center gap-2 rounded-lg border border-error-200 bg-error-50 px-4 text-sm font-medium text-error-700 hover:bg-error-100">
                     <Trash2 className="size-4" />
                     Delete
                   </button>
-                ) : null}
+                </div>
               </div>
-            </div>
+            ) : (
+              <div className="mt-4 rounded-lg border border-dashed border-gray-200 p-5 text-sm text-gray-500">
+                No table selected.
+              </div>
+            )}
           </section>
 
           <section className="rounded-lg border border-gray-200 bg-white p-5 shadow-theme-sm">
             <div className="flex items-center justify-between gap-3">
-              <h2 className="text-lg font-semibold text-gray-900">{selectedArea ? "Edit section" : "Add section"}</h2>
-              <button type="button" onClick={newArea} className="text-sm font-medium text-brand-600 hover:text-brand-700">
-                New
+              <h2 className="text-lg font-semibold text-gray-900">Edit section</h2>
+              <button type="button" onClick={openNewAreaModal} className="text-sm font-medium text-brand-600 hover:text-brand-700">
+                Add section
               </button>
             </div>
 
             <div className="mt-4 space-y-4">
               <div>
                 <FieldLabel htmlFor="area-select">Existing section</FieldLabel>
-                <select id="area-select" className={selectClass} value={selectedAreaId} onChange={(event) => setSelectedAreaId(event.target.value)}>
-                  <option value="">New section</option>
-                  {activeAreas.map((area) => (
-                    <option key={area.id} value={area.id}>
-                      {area.name}
-                    </option>
-                  ))}
-                </select>
+                <SelectInput
+                  id="area-select"
+                  value={selectedAreaId}
+                  onChange={setSelectedAreaId}
+                  options={[{ value: "", label: "New section" }, ...areaOptions]}
+                />
               </div>
-              <div className="grid gap-3 sm:grid-cols-2">
-                <div>
-                  <FieldLabel htmlFor="area-name">Name</FieldLabel>
-                  <input
-                    id="area-name"
-                    className={inputClass}
-                    value={areaForm.name}
-                    onChange={(event) => {
-                      const name = event.target.value;
-                      setAreaForm((current) => ({
-                        ...current,
-                        name,
-                        code: selectedArea ? current.code : codeFromName(name),
-                      }));
-                    }}
-                  />
+              {selectedArea ? (
+                <>
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <div>
+                      <FieldLabel htmlFor="area-name">Name</FieldLabel>
+                      <input
+                        id="area-name"
+                        className={inputClass}
+                        value={areaForm.name}
+                        onChange={(event) => setAreaForm((current) => ({ ...current, name: event.target.value }))}
+                      />
+                    </div>
+                    <div>
+                      <FieldLabel htmlFor="area-code">Code</FieldLabel>
+                      <input
+                        id="area-code"
+                        className={inputClass}
+                        value={areaForm.code}
+                        onChange={(event) => setAreaForm((current) => ({ ...current, code: event.target.value.toUpperCase() }))}
+                      />
+                    </div>
+                  </div>
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <div>
+                      <FieldLabel htmlFor="function-enabled">Function area</FieldLabel>
+                      <SelectInput
+                        id="function-enabled"
+                        value={areaForm.function_enabled}
+                        onChange={(value) => setAreaForm((current) => ({ ...current, function_enabled: value }))}
+                        options={yesNoOptions}
+                      />
+                    </div>
+                    <div>
+                      <FieldLabel htmlFor="sort-order">Order</FieldLabel>
+                      <input
+                        id="sort-order"
+                        type="number"
+                        className={inputClass}
+                        value={areaForm.sort_order}
+                        onChange={(event) => setAreaForm((current) => ({ ...current, sort_order: event.target.value }))}
+                      />
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <button type="button" onClick={saveArea} className="inline-flex h-11 items-center gap-2 rounded-lg bg-brand-600 px-4 text-sm font-medium text-white hover:bg-brand-700">
+                      <Save className="size-4" />
+                      Save section
+                    </button>
+                    <button type="button" onClick={deleteArea} className="inline-flex h-11 items-center gap-2 rounded-lg border border-error-200 bg-error-50 px-4 text-sm font-medium text-error-700 hover:bg-error-100">
+                      <Trash2 className="size-4" />
+                      Remove
+                    </button>
+                  </div>
+                </>
+              ) : (
+                <div className="rounded-lg border border-dashed border-gray-200 p-5 text-sm text-gray-500">
+                  No section selected.
                 </div>
-                <div>
-                  <FieldLabel htmlFor="area-code">Code</FieldLabel>
-                  <input
-                    id="area-code"
-                    className={inputClass}
-                    value={areaForm.code}
-                    onChange={(event) => setAreaForm((current) => ({ ...current, code: event.target.value.toUpperCase() }))}
-                  />
-                </div>
-              </div>
-              <div className="grid gap-3 sm:grid-cols-2">
-                <div>
-                  <FieldLabel htmlFor="function-enabled">Function area</FieldLabel>
-                  <select
-                    id="function-enabled"
-                    className={selectClass}
-                    value={areaForm.function_enabled}
-                    onChange={(event) => setAreaForm((current) => ({ ...current, function_enabled: event.target.value }))}
-                  >
-                    <option value="0">No</option>
-                    <option value="1">Yes</option>
-                  </select>
-                </div>
-                <div>
-                  <FieldLabel htmlFor="sort-order">Order</FieldLabel>
-                  <input
-                    id="sort-order"
-                    type="number"
-                    className={inputClass}
-                    value={areaForm.sort_order}
-                    onChange={(event) => setAreaForm((current) => ({ ...current, sort_order: event.target.value }))}
-                  />
-                </div>
-              </div>
-              <div className="flex flex-wrap gap-2">
-                <button type="button" onClick={saveArea} className="inline-flex h-11 items-center gap-2 rounded-lg bg-brand-600 px-4 text-sm font-medium text-white hover:bg-brand-700">
-                  <Save className="size-4" />
-                  Save section
-                </button>
-                {selectedArea ? (
-                  <button type="button" onClick={deleteArea} className="inline-flex h-11 items-center gap-2 rounded-lg border border-error-200 bg-error-50 px-4 text-sm font-medium text-error-700 hover:bg-error-100">
-                    <Trash2 className="size-4" />
-                    Remove
-                  </button>
-                ) : null}
-              </div>
+              )}
             </div>
           </section>
         </aside>
       </div>
+
+      <Modal isOpen={isTableModalOpen} onClose={() => setTableModalOpen(false)} className="m-4 max-w-[560px]">
+        <div className="p-5 sm:p-6">
+          <div className="pr-12">
+            <h2 className="text-lg font-semibold text-gray-900">Add table</h2>
+          </div>
+
+          <div className="mt-5 space-y-4">
+            <div>
+              <FieldLabel htmlFor="new-table-area">Section</FieldLabel>
+              <SelectInput
+                id="new-table-area"
+                value={newTableForm.area_id}
+                onChange={(value) => setNewTableForm((current) => ({ ...current, area_id: value }))}
+                options={[{ value: "", label: "Choose a section" }, ...areaOptions]}
+              />
+            </div>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div>
+                <FieldLabel htmlFor="new-table-number">Table number</FieldLabel>
+                <input
+                  id="new-table-number"
+                  type="number"
+                  min="1"
+                  className={inputClass}
+                  value={newTableForm.table_number}
+                  onChange={(event) => setNewTableForm((current) => ({ ...current, table_number: event.target.value }))}
+                />
+              </div>
+              <div>
+                <FieldLabel htmlFor="new-table-capacity">Capacity</FieldLabel>
+                <input
+                  id="new-table-capacity"
+                  type="number"
+                  min="1"
+                  className={inputClass}
+                  value={newTableForm.capacity}
+                  onChange={(event) => setNewTableForm((current) => ({ ...current, capacity: event.target.value }))}
+                />
+              </div>
+            </div>
+            <div>
+              <FieldLabel htmlFor="new-table-active">Status</FieldLabel>
+              <SelectInput
+                id="new-table-active"
+                value={newTableForm.active}
+                onChange={(value) => setNewTableForm((current) => ({ ...current, active: value }))}
+                options={activeOptions}
+              />
+            </div>
+            <div className="flex flex-wrap justify-end gap-2 pt-2">
+              <button type="button" onClick={() => setTableModalOpen(false)} className="h-11 rounded-lg border border-gray-300 bg-white px-4 text-sm font-medium text-gray-700 hover:bg-gray-50">
+                Cancel
+              </button>
+              <button type="button" onClick={createTable} className="inline-flex h-11 items-center gap-2 rounded-lg bg-brand-600 px-4 text-sm font-medium text-white hover:bg-brand-700">
+                <Plus className="size-4" />
+                Add table
+              </button>
+            </div>
+          </div>
+        </div>
+      </Modal>
+
+      <Modal isOpen={isAreaModalOpen} onClose={() => setAreaModalOpen(false)} className="m-4 max-w-[620px]">
+        <div className="p-5 sm:p-6">
+          <div className="pr-12">
+            <h2 className="text-lg font-semibold text-gray-900">Add section</h2>
+          </div>
+
+          <div className="mt-5 space-y-4">
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div>
+                <FieldLabel htmlFor="new-area-name">Name</FieldLabel>
+                <input
+                  id="new-area-name"
+                  className={inputClass}
+                  value={newAreaForm.name}
+                  onChange={(event) => {
+                    const name = event.target.value;
+                    setNewAreaForm((current) => ({ ...current, name, code: codeFromName(name) }));
+                  }}
+                />
+              </div>
+              <div>
+                <FieldLabel htmlFor="new-area-code">Code</FieldLabel>
+                <input
+                  id="new-area-code"
+                  className={inputClass}
+                  value={newAreaForm.code}
+                  onChange={(event) => setNewAreaForm((current) => ({ ...current, code: event.target.value.toUpperCase() }))}
+                />
+              </div>
+            </div>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div>
+                <FieldLabel htmlFor="new-function-enabled">Function area</FieldLabel>
+                <SelectInput
+                  id="new-function-enabled"
+                  value={newAreaForm.function_enabled}
+                  onChange={(value) => setNewAreaForm((current) => ({ ...current, function_enabled: value }))}
+                  options={yesNoOptions}
+                />
+              </div>
+              <div>
+                <FieldLabel htmlFor="new-sort-order">Order</FieldLabel>
+                <input
+                  id="new-sort-order"
+                  type="number"
+                  className={inputClass}
+                  value={newAreaForm.sort_order}
+                  onChange={(event) => setNewAreaForm((current) => ({ ...current, sort_order: event.target.value }))}
+                />
+              </div>
+            </div>
+            <div className="flex flex-wrap justify-end gap-2 pt-2">
+              <button type="button" onClick={() => setAreaModalOpen(false)} className="h-11 rounded-lg border border-gray-300 bg-white px-4 text-sm font-medium text-gray-700 hover:bg-gray-50">
+                Cancel
+              </button>
+              <button type="button" onClick={createArea} className="inline-flex h-11 items-center gap-2 rounded-lg bg-brand-600 px-4 text-sm font-medium text-white hover:bg-brand-700">
+                <Plus className="size-4" />
+                Add section
+              </button>
+            </div>
+          </div>
+        </div>
+      </Modal>
     </>
   );
 }

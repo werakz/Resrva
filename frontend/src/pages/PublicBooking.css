@@ -55,6 +55,17 @@
   line-height: 1;
 }
 
+.public-booking-venue-image {
+  margin: 0 auto;
+  display: block;
+  width: 112px;
+  height: 112px;
+  border-radius: 999px;
+  object-fit: cover;
+  border: 3px solid #fff;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.18);
+}
+
 .public-booking-name {
   margin-top: 12px;
   color: #276749;
@@ -233,6 +244,12 @@
   opacity: 0.35;
 }
 
+.public-booking-day.is-blocked {
+  background: #fee2e2;
+  color: #991b1b;
+  text-decoration: line-through;
+}
+
 .public-booking-side {
   display: flex;
   flex-direction: column;
@@ -344,6 +361,14 @@
   border-color: #276749;
   background: #276749;
   color: #fff;
+}
+
+.public-booking-service.is-disabled,
+.public-booking-service:disabled {
+  cursor: not-allowed;
+  background: #f3f4f6;
+  color: #9ca3af;
+  opacity: 0.75;
 }
 
 .public-booking-panel {
@@ -730,6 +755,11 @@
   .public-booking-header {
     height: auto;
     padding: 18px 16px 22px;
+  }
+
+  .public-booking-venue-image {
+    width: 112px;
+    height: 112px;
   }
 
   .public-booking-manager {

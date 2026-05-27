@@ -16,11 +16,19 @@ export type OpeningHour = {
   is_closed: number | boolean;
 };
 
+export type OnlineBookingBlock = {
+  block_date: string;
+  created_by_user_id?: number | null;
+  created_at?: string;
+  updated_at?: string;
+};
+
 export type MetaPayload = {
   areas: Area[];
   function_areas: Area[];
   settings: Record<string, string>;
   opening_hours: OpeningHour[];
+  online_booking_blocks?: OnlineBookingBlock[];
 };
 
 export type User = {

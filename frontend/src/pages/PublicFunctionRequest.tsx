@@ -6,8 +6,8 @@ import type { MetaPayload } from "../types";
 import {
   FieldLabel,
   FormMessage,
+  SelectInput,
   inputClass,
-  selectClass,
   textareaClass,
 } from "../components/resrva/FormField";
 
@@ -53,8 +53,17 @@ export default function PublicFunctionRequest() {
     setForm((current) => ({ ...current, [field]: value }));
   };
 
+  const functionRequestsEnabled = (meta?.settings.online_function_requests_enabled ?? "1") !== "0";
+  const venueName = meta?.settings.venue_name || "Old Canberra Inn";
+  const venueImageUrl = meta?.settings.venue_image_url || "";
+
   const submitRequest = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    if (!functionRequestsEnabled) {
+      setMessage({ type: "error", text: "Online function requests are currently turned off." });
+      return;
+    }
+
     setSubmitting(true);
     setMessage(null);
 
@@ -98,6 +107,9 @@ export default function PublicFunctionRequest() {
         </Link>
 
         <form onSubmit={submitRequest} className="rounded-lg border border-gray-200 bg-white p-5 shadow-theme-lg sm:p-6">
+          {venueImageUrl ? (
+            <img src={venueImageUrl} alt={venueName} className="mb-5 h-40 w-full rounded-lg object-cover" />
+          ) : null}
           <div className="mb-5">
             <p className="text-sm font-medium uppercase tracking-wide text-brand-700">
               Functions and events
@@ -108,6 +120,12 @@ export default function PublicFunctionRequest() {
               the final area after review.
             </p>
           </div>
+
+          {!functionRequestsEnabled ? (
+            <div className="mb-5">
+              <FormMessage type="info">Online function requests are currently turned off.</FormMessage>
+            </div>
+          ) : null}
 
           <div className="grid gap-4 sm:grid-cols-2">
             <div>
@@ -177,16 +195,16 @@ export default function PublicFunctionRequest() {
             </div>
             <div>
               <FieldLabel htmlFor="duration">Duration</FieldLabel>
-              <select
+              <SelectInput
                 id="duration"
-                className={selectClass}
                 value={form.duration_minutes}
-                onChange={(event) => updateField("duration_minutes", event.target.value)}
-              >
-                <option value="120">2 hours</option>
-                <option value="180">3 hours</option>
-                <option value="240">4 hours</option>
-              </select>
+                onChange={(value) => updateField("duration_minutes", value)}
+                options={[
+                  { value: "120", label: "2 hours" },
+                  { value: "180", label: "3 hours" },
+                  { value: "240", label: "4 hours" },
+                ]}
+              />
             </div>
             <div>
               <FieldLabel htmlFor="function-guests">Guests</FieldLabel>
@@ -202,19 +220,15 @@ export default function PublicFunctionRequest() {
             </div>
             <div className="sm:col-span-2">
               <FieldLabel htmlFor="preferred-function-area">Preferred area</FieldLabel>
-              <select
+              <SelectInput
                 id="preferred-function-area"
-                className={selectClass}
                 value={form.preferred_area_id}
-                onChange={(event) => updateField("preferred_area_id", event.target.value)}
-              >
-                <option value="">No preference</option>
-                {(meta?.function_areas || []).map((area) => (
-                  <option key={area.id} value={area.id}>
-                    {area.name}
-                  </option>
-                ))}
-              </select>
+                onChange={(value) => updateField("preferred_area_id", value)}
+                options={[
+                  { value: "", label: "No preference" },
+                  ...(meta?.function_areas || []).map((area) => ({ value: String(area.id), label: area.name })),
+                ]}
+              />
             </div>
             <div className="sm:col-span-2">
               <FieldLabel htmlFor="function-notes">Notes</FieldLabel>
@@ -232,7 +246,7 @@ export default function PublicFunctionRequest() {
             {message ? <FormMessage type={message.type}>{message.text}</FormMessage> : null}
             <button
               type="submit"
-              disabled={submitting}
+              disabled={submitting || !functionRequestsEnabled}
               className="inline-flex h-11 items-center gap-2 rounded-lg bg-brand-600 px-4 text-sm font-medium text-white shadow-theme-xs hover:bg-brand-700 disabled:opacity-60"
             >
               <Send className="size-4" />

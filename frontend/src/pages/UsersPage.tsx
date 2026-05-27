@@ -2,22 +2,31 @@ import { useEffect, useMemo, useState } from "react";
 import { Plus, Save, Search, X } from "lucide-react";
 import { apiFetch, toJsonBody } from "../lib/api";
 import type { User } from "../types";
-import { FieldLabel, FormMessage, inputClass, selectClass } from "../components/resrva/FormField";
+import { useAuth } from "../context/AuthContext";
+import { FieldLabel, FormMessage, SelectInput, inputClass } from "../components/resrva/FormField";
 import { LoadingState } from "../components/resrva/LoadingState";
 import { PageHeader } from "../components/resrva/PageHeader";
-import { StatusBadge } from "../components/resrva/StatusBadge";
+
+const statusControlStyles: Record<User["status"], string> = {
+  active:
+    "h-9 rounded-full border-success-200 bg-success-50 px-3 py-1.5 text-xs font-semibold capitalize text-success-700 ring-1 ring-inset ring-success-600/20 focus:border-success-300 focus:ring-success-500/10",
+  inactive:
+    "h-9 rounded-full border-gray-200 bg-gray-100 px-3 py-1.5 text-xs font-semibold capitalize text-gray-700 ring-1 ring-inset ring-gray-500/20 focus:border-gray-300 focus:ring-gray-500/10",
+};
 
 export default function UsersPage() {
+  const { user: currentUser } = useAuth();
   const [users, setUsers] = useState<User[] | null>(null);
   const [form, setForm] = useState({ name: "", email: "", password: "" });
   const [search, setSearch] = useState("");
   const [isCreateOpen, setIsCreateOpen] = useState(false);
-  const [statusEdits, setStatusEdits] = useState<Record<number, string>>({});
+  const [statusEdits, setStatusEdits] = useState<Record<number, User["status"]>>({});
   const [message, setMessage] = useState<{ type: "error" | "success"; text: string } | null>(null);
 
   const loadUsers = async () => {
     const payload = await apiFetch<{ items: User[] }>("users");
     setUsers(payload.items);
+    setStatusEdits({});
   };
 
   useEffect(() => {
@@ -35,23 +44,34 @@ export default function UsersPage() {
 
   const createUser = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    await apiFetch<{ ok: boolean }>("users", {
-      method: "POST",
-      ...toJsonBody(form),
-    });
-    setForm({ name: "", email: "", password: "" });
-    setIsCreateOpen(false);
-    setMessage({ type: "success", text: "Manager account created." });
-    await loadUsers();
+    try {
+      await apiFetch<{ ok: boolean }>("users", {
+        method: "POST",
+        ...toJsonBody(form),
+      });
+      setForm({ name: "", email: "", password: "" });
+      setIsCreateOpen(false);
+      setMessage({ type: "success", text: "Manager account created." });
+      await loadUsers();
+    } catch (error) {
+      setMessage({ type: "error", text: error instanceof Error ? error.message : "User could not be created." });
+    }
   };
 
   const saveUser = async (user: User) => {
-    await apiFetch<{ ok: boolean }>(`users/${user.id}`, {
-      method: "PUT",
-      ...toJsonBody({ status: statusEdits[user.id] || user.status }),
-    });
-    setMessage({ type: "success", text: `${user.name} updated.` });
-    await loadUsers();
+    const nextStatus = statusEdits[user.id] || user.status;
+    if (nextStatus === user.status) return;
+
+    try {
+      await apiFetch<{ ok: boolean }>(`users/${user.id}`, {
+        method: "PUT",
+        ...toJsonBody({ status: nextStatus }),
+      });
+      setMessage({ type: "success", text: `${user.name} updated.` });
+      await loadUsers();
+    } catch (error) {
+      setMessage({ type: "error", text: error instanceof Error ? error.message : "User status could not be updated." });
+    }
   };
 
   if (!users && message?.type === "error") {
@@ -131,29 +151,47 @@ export default function UsersPage() {
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
-              {filteredUsers.map((user) => (
-                <tr key={user.id}>
-                  <td className="px-3 py-3 font-medium text-gray-900">{user.name}</td>
-                  <td className="px-3 py-3 text-gray-600">{user.email}</td>
-                  <td className="px-3 py-3 capitalize text-gray-600">{user.role}</td>
-                  <td className="px-3 py-3">
-                    <div className="mb-2">
-                      <StatusBadge status={user.status} />
-                    </div>
-                    <select className={selectClass} value={statusEdits[user.id] || user.status} onChange={(event) => setStatusEdits((current) => ({ ...current, [user.id]: event.target.value }))}>
-                      <option value="active">Active</option>
-                      <option value="inactive">Inactive</option>
-                    </select>
-                  </td>
-                  <td className="px-3 py-3 text-gray-500">{user.updated_at || user.created_at}</td>
-                  <td className="px-3 py-3">
-                    <button type="button" onClick={() => saveUser(user)} className="inline-flex h-9 items-center gap-2 rounded-lg bg-brand-600 px-3 text-xs font-medium text-white hover:bg-brand-700">
-                      <Save className="size-3.5" />
-                      Save
-                    </button>
-                  </td>
-                </tr>
-              ))}
+              {filteredUsers.map((user) => {
+                const selectedStatus = statusEdits[user.id] || user.status;
+                const hasStatusChange = selectedStatus !== user.status;
+                const isCurrentUser = currentUser?.id === user.id;
+
+                return (
+                  <tr key={user.id}>
+                    <td className="px-3 py-3 font-medium text-gray-900">{user.name}</td>
+                    <td className="px-3 py-3 text-gray-600">{user.email}</td>
+                    <td className="px-3 py-3 capitalize text-gray-600">{user.role}</td>
+                    <td className="px-3 py-3">
+                      <SelectInput
+                        value={selectedStatus}
+                        onChange={(value) =>
+                          setStatusEdits((current) => ({ ...current, [user.id]: value as User["status"] }))
+                        }
+                        ariaLabel={`${user.name} status`}
+                        className="w-36"
+                        buttonClassName={`${statusControlStyles[selectedStatus]} ${hasStatusChange ? "border-warning-300 ring-warning-500/30" : ""}`}
+                        menuClassName="w-36"
+                        options={[
+                          { value: "active", label: "Active" },
+                          { value: "inactive", label: "Inactive", disabled: isCurrentUser },
+                        ]}
+                      />
+                    </td>
+                    <td className="px-3 py-3 text-gray-500">{user.updated_at || user.created_at}</td>
+                    <td className="px-3 py-3">
+                      <button
+                        type="button"
+                        onClick={() => saveUser(user)}
+                        disabled={!hasStatusChange}
+                        className="inline-flex h-9 items-center gap-2 rounded-lg bg-brand-600 px-3 text-xs font-medium text-white hover:bg-brand-700 disabled:cursor-not-allowed disabled:bg-gray-300 disabled:text-gray-500"
+                      >
+                        <Save className="size-3.5" />
+                        Save
+                      </button>
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>

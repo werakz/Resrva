@@ -46,6 +46,31 @@ export async function apiFetch<T>(
   return payload as T;
 }
 
+export async function apiUpload<T>(
+  route: string,
+  body: FormData,
+  options: RequestInit = {},
+): Promise<T> {
+  const response = await fetch(apiUrl(route), {
+    credentials: "include",
+    ...options,
+    method: options.method || "POST",
+    body,
+  });
+
+  const payload = await response.json().catch(() => ({}));
+
+  if (!response.ok) {
+    throw new ApiError(
+      payload.error || "The upload could not be completed.",
+      response.status,
+      payload.details || null,
+    );
+  }
+
+  return payload as T;
+}
+
 export function toJsonBody(data: unknown): Pick<RequestInit, "body"> {
   return { body: JSON.stringify(data) };
 }

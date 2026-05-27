@@ -1,24 +1,226 @@
-import { useEffect, useState } from "react";
-import { RefreshCw, Save } from "lucide-react";
-import { apiFetch, toJsonBody } from "../lib/api";
+import { useEffect, useRef, useState } from "react";
+import type { ReactNode } from "react";
+import flatpickr from "flatpickr";
+import type { Instance as FlatpickrInstance } from "flatpickr/dist/types/instance";
+import { CalendarDays, ImageIcon, RefreshCw, Save, Trash2, Upload, X } from "lucide-react";
+import { apiFetch, apiUpload, toJsonBody } from "../lib/api";
 import type { MetaPayload, OpeningHour } from "../types";
-import { FieldLabel, FormMessage, inputClass, selectClass } from "../components/resrva/FormField";
+import { FieldLabel, FormMessage, SelectInput, inputClass, textareaClass } from "../components/resrva/FormField";
 import { LoadingState } from "../components/resrva/LoadingState";
 import { PageHeader } from "../components/resrva/PageHeader";
 
 const dayLabels = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+const defaultSettings: Record<string, string> = {
+  min_table_guests: "8",
+  max_table_guests: "29",
+  default_duration_minutes: "120",
+  slot_interval_minutes: "30",
+  minimum_booking_notice_minutes: "0",
+  annual_closed_day: "12-25",
+  annual_closed_days: "12-25",
+  venue_name: "Old Canberra Inn",
+  venue_phone: "(02) 6134 6000",
+  venue_email: "manager@oldcanberrainn.com.au",
+  venue_image_url: "",
+  booking_policy_note: "Online bookings are for groups of 8 or more. Smaller groups are welcome to walk in.",
+  online_table_bookings_enabled: "1",
+  online_function_requests_enabled: "1",
+};
+const annualPickerYear = 2024;
+
+function parseClosedMonthDays(value: string): string[] {
+  return value
+    .split(",")
+    .map((date) => date.trim())
+    .filter((date) => /^\d{2}-\d{2}$/.test(date))
+    .filter((date, index, dates) => dates.indexOf(date) === index)
+    .sort();
+}
+
+function monthDayFromDate(date: Date): string {
+  return `${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
+
+function pickerDateFromMonthDay(monthDay: string): string {
+  return `${annualPickerYear}-${monthDay}`;
+}
+
+function closedDateLabel(monthDay: string): string {
+  const [month, day] = monthDay.split("-").map(Number);
+  const date = new Date(annualPickerYear, month - 1, day);
+
+  return new Intl.DateTimeFormat("en-AU", { day: "numeric", month: "short" }).format(date);
+}
+
+function closedDatesDisplay(value: string): string {
+  const dates = parseClosedMonthDays(value);
+
+  return dates.length > 0 ? dates.map(closedDateLabel).join(", ") : "No annual closed dates";
+}
+
+function blockedDateLabel(value: string): string {
+  const [year, month, day] = value.split("-").map(Number);
+  const date = new Date(year, month - 1, day);
+
+  return new Intl.DateTimeFormat("en-AU", {
+    weekday: "short",
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+  }).format(date);
+}
+
+function SettingsSection({
+  title,
+  children,
+  className = "",
+}: {
+  title: string;
+  children: ReactNode;
+  className?: string;
+}) {
+  return (
+    <section className={`rounded-2xl border border-gray-200 bg-white shadow-theme-xs dark:border-gray-800 dark:bg-white/[0.03] ${className}`}>
+      <div className="border-b border-gray-100 px-5 py-4 dark:border-gray-800">
+        <h2 className="text-base font-medium text-gray-800 dark:text-white/90">{title}</h2>
+      </div>
+      <div className="p-5">{children}</div>
+    </section>
+  );
+}
+
+function SettingSwitch({
+  id,
+  label,
+  checked,
+  onChange,
+}: {
+  id: string;
+  label: string;
+  checked: boolean;
+  onChange: (checked: boolean) => void;
+}) {
+  return (
+    <div className="flex items-center justify-between gap-4 rounded-lg border border-gray-200 px-4 py-3 dark:border-gray-800">
+      <label htmlFor={id} className="text-sm font-medium text-gray-700 dark:text-gray-300">
+        {label}
+      </label>
+      <button
+        id={id}
+        type="button"
+        role="switch"
+        aria-checked={checked}
+        onClick={() => onChange(!checked)}
+        className={`relative inline-flex h-6 w-11 items-center rounded-full transition ${
+          checked ? "bg-brand-500" : "bg-gray-300 dark:bg-gray-700"
+        }`}
+      >
+        <span
+          className={`inline-block size-5 rounded-full bg-white shadow-theme-xs transition ${
+            checked ? "translate-x-5" : "translate-x-0.5"
+          }`}
+        />
+      </button>
+    </div>
+  );
+}
+
+function AnnualClosedDatesPicker({
+  id,
+  value,
+  onChange,
+}: {
+  id: string;
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const pickerRef = useRef<FlatpickrInstance | null>(null);
+  const onChangeRef = useRef(onChange);
+  const initialDatesRef = useRef(parseClosedMonthDays(value).map(pickerDateFromMonthDay));
+
+  useEffect(() => {
+    onChangeRef.current = onChange;
+  }, [onChange]);
+
+  useEffect(() => {
+    if (!inputRef.current) return undefined;
+
+    const picker = flatpickr(inputRef.current, {
+      appendTo: document.body,
+      mode: "multiple",
+      dateFormat: "Y-m-d",
+      disableMobile: true,
+      defaultDate: initialDatesRef.current,
+      onChange: (selectedDates) => {
+        const nextValue = selectedDates.map(monthDayFromDate).sort().join(",");
+        onChangeRef.current(nextValue);
+        if (inputRef.current) {
+          inputRef.current.value = closedDatesDisplay(nextValue);
+        }
+      },
+    });
+
+    if (!Array.isArray(picker)) {
+      pickerRef.current = picker;
+      if (inputRef.current) {
+        inputRef.current.value = closedDatesDisplay(value);
+      }
+    }
+
+    return () => {
+      if (!Array.isArray(picker)) {
+        picker.destroy();
+      }
+      pickerRef.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    const picker = pickerRef.current;
+    if (!picker) return;
+
+    picker.setDate(parseClosedMonthDays(value).map(pickerDateFromMonthDay), false, "Y-m-d");
+    if (inputRef.current) {
+      inputRef.current.value = closedDatesDisplay(value);
+    }
+  }, [value]);
+
+  return (
+    <div className="relative">
+      <input
+        id={id}
+        ref={inputRef}
+        readOnly
+        value={closedDatesDisplay(value)}
+        onClick={() => pickerRef.current?.open()}
+        className={`${inputClass} pr-10`}
+      />
+      <CalendarDays className="pointer-events-none absolute right-3 top-1/2 size-4 -translate-y-1/2 text-gray-400" />
+    </div>
+  );
+}
 
 export default function SettingsPage() {
   const [meta, setMeta] = useState<MetaPayload | null>(null);
   const [settings, setSettings] = useState<Record<string, string>>({});
   const [openingHours, setOpeningHours] = useState<OpeningHour[]>([]);
+  const [blockedOnlineDates, setBlockedOnlineDates] = useState<string[]>([]);
+  const [uploadingImage, setUploadingImage] = useState(false);
   const [message, setMessage] = useState<{ type: "error" | "success"; text: string } | null>(null);
 
   const loadSettings = async () => {
     const payload = await apiFetch<MetaPayload>("settings");
+    const nextSettings = {
+      ...defaultSettings,
+      ...payload.settings,
+      annual_closed_days:
+        payload.settings.annual_closed_days || payload.settings.annual_closed_day || defaultSettings.annual_closed_days,
+    };
     setMeta(payload);
-    setSettings(payload.settings);
+    setSettings(nextSettings);
     setOpeningHours(payload.opening_hours);
+    setBlockedOnlineDates((payload.online_booking_blocks || []).map((block) => block.block_date).sort());
   };
 
   useEffect(() => {
@@ -30,6 +232,14 @@ export default function SettingsPage() {
   const updateSetting = (key: string, value: string) => {
     setSettings((current) => ({ ...current, [key]: value }));
   };
+
+  const settingValue = (key: string) => settings[key] ?? defaultSettings[key] ?? "";
+
+  const updateSettingToggle = (key: string, value: boolean) => {
+    updateSetting(key, value ? "1" : "0");
+  };
+
+  const settingEnabled = (key: string) => settingValue(key) !== "0";
 
   const updateHours = (day: number, field: keyof OpeningHour, value: string | boolean) => {
     setOpeningHours((current) =>
@@ -46,6 +256,44 @@ export default function SettingsPage() {
     });
     setMessage({ type: "success", text: "Settings saved." });
     await loadSettings();
+  };
+
+  const removeBlockedOnlineDate = async (date: string) => {
+    try {
+      await apiFetch<{ ok: boolean }>(`online-booking-blocks/${date}`, { method: "DELETE" });
+      setBlockedOnlineDates((current) => current.filter((blockedDate) => blockedDate !== date));
+      setMessage({ type: "success", text: "Blocked date removed." });
+    } catch (error) {
+      setMessage({ type: "error", text: error instanceof Error ? error.message : "Blocked date could not be removed." });
+    }
+  };
+
+  const uploadVenueImage = async (file: File | undefined) => {
+    if (!file) return;
+
+    const formData = new FormData();
+    formData.append("image", file);
+    setUploadingImage(true);
+
+    try {
+      const response = await apiUpload<{ url: string }>("settings/venue-image", formData);
+      updateSetting("venue_image_url", response.url);
+      setMessage({ type: "success", text: "Venue image updated." });
+    } catch (error) {
+      setMessage({ type: "error", text: error instanceof Error ? error.message : "Venue image could not be uploaded." });
+    } finally {
+      setUploadingImage(false);
+    }
+  };
+
+  const removeVenueImage = async () => {
+    try {
+      await apiFetch<{ ok: boolean }>("settings/venue-image", { method: "DELETE" });
+      updateSetting("venue_image_url", "");
+      setMessage({ type: "success", text: "Venue image removed." });
+    } catch (error) {
+      setMessage({ type: "error", text: error instanceof Error ? error.message : "Venue image could not be removed." });
+    }
   };
 
   if (!meta && message?.type === "error") {
@@ -74,65 +322,220 @@ export default function SettingsPage() {
         }
       />
 
-      <div className="grid gap-6 xl:grid-cols-[0.8fr_1.2fr]">
-        <section className="rounded-lg border border-gray-200 bg-white p-5 shadow-theme-sm">
-          <h2 className="text-lg font-semibold text-gray-900">Rules</h2>
-          <div className="mt-4 grid gap-4 sm:grid-cols-2 xl:grid-cols-1">
+      {message ? (
+        <div className="mb-5">
+          <FormMessage type={message.type}>{message.text}</FormMessage>
+        </div>
+      ) : null}
+
+      <div className="grid gap-5 xl:grid-cols-2">
+        <SettingsSection title="Venue details">
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div>
+              <FieldLabel htmlFor="venue-name">Venue name</FieldLabel>
+              <input id="venue-name" className={inputClass} value={settingValue("venue_name")} onChange={(event) => updateSetting("venue_name", event.target.value)} />
+            </div>
+            <div>
+              <FieldLabel htmlFor="venue-phone">Phone</FieldLabel>
+              <input id="venue-phone" className={inputClass} value={settingValue("venue_phone")} onChange={(event) => updateSetting("venue_phone", event.target.value)} />
+            </div>
+            <div className="sm:col-span-2">
+              <FieldLabel htmlFor="venue-email">Email</FieldLabel>
+              <input id="venue-email" type="email" className={inputClass} value={settingValue("venue_email")} onChange={(event) => updateSetting("venue_email", event.target.value)} />
+            </div>
+            <div className="sm:col-span-2">
+              <FieldLabel htmlFor="venue-image">Venue image</FieldLabel>
+              <div className="grid gap-4 rounded-lg border border-gray-200 p-4 dark:border-gray-800 sm:grid-cols-[168px_1fr]">
+                <div className="flex h-32 items-center justify-center overflow-hidden rounded-lg border border-gray-200 bg-gray-50 dark:border-gray-800 dark:bg-gray-900">
+                  {settingValue("venue_image_url") ? (
+                    <img
+                      src={settingValue("venue_image_url")}
+                      alt={settingValue("venue_name") || "Venue"}
+                      className="h-full w-full object-cover"
+                    />
+                  ) : (
+                    <ImageIcon className="size-8 text-gray-400" />
+                  )}
+                </div>
+                <div className="flex flex-wrap content-start items-center gap-3">
+                  <input
+                    id="venue-image"
+                    type="file"
+                    accept="image/png,image/jpeg,image/webp,image/gif"
+                    className="sr-only"
+                    onChange={(event) => {
+                      uploadVenueImage(event.target.files?.[0]);
+                      event.target.value = "";
+                    }}
+                  />
+                  <label
+                    htmlFor="venue-image"
+                    className="inline-flex h-10 cursor-pointer items-center gap-2 rounded-lg bg-brand-600 px-4 text-sm font-medium text-white hover:bg-brand-700"
+                  >
+                    <Upload className="size-4" />
+                    {uploadingImage ? "Uploading" : settingValue("venue_image_url") ? "Replace image" : "Upload image"}
+                  </label>
+                  {settingValue("venue_image_url") ? (
+                    <button
+                      type="button"
+                      onClick={removeVenueImage}
+                      className="inline-flex h-10 items-center gap-2 rounded-lg border border-gray-300 bg-white px-4 text-sm font-medium text-gray-700 shadow-theme-xs hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-300"
+                    >
+                      <Trash2 className="size-4" />
+                      Remove
+                    </button>
+                  ) : null}
+                </div>
+              </div>
+            </div>
+            <div>
+              <FieldLabel htmlFor="annual-closed-days">Annual closed dates</FieldLabel>
+              <AnnualClosedDatesPicker
+                id="annual-closed-days"
+                value={settingValue("annual_closed_days") || settingValue("annual_closed_day")}
+                onChange={(value) => {
+                  updateSetting("annual_closed_days", value);
+                  updateSetting("annual_closed_day", parseClosedMonthDays(value)[0] || "");
+                }}
+              />
+            </div>
+          </div>
+        </SettingsSection>
+
+        <SettingsSection title="Online bookings">
+          <div className="space-y-4">
+            <SettingSwitch
+              id="online-table-bookings"
+              label="Table bookings"
+              checked={settingEnabled("online_table_bookings_enabled")}
+              onChange={(checked) => updateSettingToggle("online_table_bookings_enabled", checked)}
+            />
+            <SettingSwitch
+              id="online-function-requests"
+              label="Function requests"
+              checked={settingEnabled("online_function_requests_enabled")}
+              onChange={(checked) => updateSettingToggle("online_function_requests_enabled", checked)}
+            />
+            <div>
+              <FieldLabel htmlFor="booking-policy-note">Policy note</FieldLabel>
+              <textarea
+                id="booking-policy-note"
+                className={`${textareaClass} min-h-28`}
+                value={settingValue("booking_policy_note")}
+                onChange={(event) => updateSetting("booking_policy_note", event.target.value)}
+              />
+            </div>
+          </div>
+        </SettingsSection>
+
+        <SettingsSection title="Blocked online booking dates">
+          {blockedOnlineDates.length === 0 ? (
+            <div className="rounded-lg border border-dashed border-gray-200 px-4 py-5 text-sm font-medium text-gray-500 dark:border-gray-800 dark:text-gray-400">
+              No dates blocked.
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {blockedOnlineDates.map((date) => (
+                <div
+                  key={date}
+                  className="flex items-center justify-between gap-3 rounded-lg border border-gray-200 px-4 py-3 dark:border-gray-800"
+                >
+                  <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                    {blockedDateLabel(date)}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => removeBlockedOnlineDate(date)}
+                    className="inline-flex size-8 items-center justify-center rounded-lg border border-gray-300 bg-white text-gray-500 hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-300"
+                    aria-label={`Remove ${blockedDateLabel(date)}`}
+                  >
+                    <X className="size-4" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </SettingsSection>
+
+        <SettingsSection title="Booking rules">
+          <div className="grid gap-4 sm:grid-cols-2">
             <div>
               <FieldLabel htmlFor="min-guests">Minimum online guests</FieldLabel>
-              <input id="min-guests" type="number" className={inputClass} value={settings.min_table_guests || ""} onChange={(event) => updateSetting("min_table_guests", event.target.value)} />
+              <input id="min-guests" type="number" min="1" className={inputClass} value={settingValue("min_table_guests")} onChange={(event) => updateSetting("min_table_guests", event.target.value)} />
             </div>
             <div>
               <FieldLabel htmlFor="max-guests">Maximum table guests</FieldLabel>
-              <input id="max-guests" type="number" className={inputClass} value={settings.max_table_guests || ""} onChange={(event) => updateSetting("max_table_guests", event.target.value)} />
+              <input id="max-guests" type="number" min="1" className={inputClass} value={settingValue("max_table_guests")} onChange={(event) => updateSetting("max_table_guests", event.target.value)} />
             </div>
             <div>
-              <FieldLabel htmlFor="duration">Default duration minutes</FieldLabel>
-              <input id="duration" type="number" className={inputClass} value={settings.default_duration_minutes || ""} onChange={(event) => updateSetting("default_duration_minutes", event.target.value)} />
+              <FieldLabel htmlFor="minimum-notice">Minimum advance notice</FieldLabel>
+              <SelectInput
+                id="minimum-notice"
+                value={settingValue("minimum_booking_notice_minutes")}
+                onChange={(value) => updateSetting("minimum_booking_notice_minutes", value)}
+                options={[
+                  { value: "0", label: "No minimum" },
+                  { value: "30", label: "30 minutes" },
+                  { value: "60", label: "1 hour" },
+                  { value: "120", label: "2 hours" },
+                  { value: "240", label: "4 hours" },
+                  { value: "720", label: "12 hours" },
+                  { value: "1440", label: "1 day" },
+                  { value: "2880", label: "2 days" },
+                  { value: "10080", label: "1 week" },
+                ]}
+              />
             </div>
             <div>
-              <FieldLabel htmlFor="slot">Slot interval minutes</FieldLabel>
-              <input id="slot" type="number" className={inputClass} value={settings.slot_interval_minutes || ""} onChange={(event) => updateSetting("slot_interval_minutes", event.target.value)} />
+              <FieldLabel htmlFor="duration">Default duration</FieldLabel>
+              <SelectInput
+                id="duration"
+                value={settingValue("default_duration_minutes")}
+                onChange={(value) => updateSetting("default_duration_minutes", value)}
+                options={[
+                  { value: "60", label: "60 minutes" },
+                  { value: "90", label: "90 minutes" },
+                  { value: "120", label: "120 minutes" },
+                  { value: "150", label: "150 minutes" },
+                  { value: "180", label: "180 minutes" },
+                ]}
+              />
             </div>
             <div>
-              <FieldLabel htmlFor="venue-email">Venue email</FieldLabel>
-              <input id="venue-email" className={inputClass} value={settings.venue_email || ""} onChange={(event) => updateSetting("venue_email", event.target.value)} />
-            </div>
-            <div>
-              <FieldLabel htmlFor="venue-phone">Venue phone</FieldLabel>
-              <input id="venue-phone" className={inputClass} value={settings.venue_phone || ""} onChange={(event) => updateSetting("venue_phone", event.target.value)} />
-            </div>
-            <div>
-              <FieldLabel htmlFor="annual-closed-day">Closed day</FieldLabel>
-              <input id="annual-closed-day" className={inputClass} value={settings.annual_closed_day || ""} onChange={(event) => updateSetting("annual_closed_day", event.target.value)} />
-            </div>
-            <div>
-              <FieldLabel htmlFor="venue-name">Venue</FieldLabel>
-              <input id="venue-name" className={inputClass} value={settings.venue_name || ""} onChange={(event) => updateSetting("venue_name", event.target.value)} />
+              <FieldLabel htmlFor="slot">Slot interval</FieldLabel>
+              <SelectInput
+                id="slot"
+                value={settingValue("slot_interval_minutes")}
+                onChange={(value) => updateSetting("slot_interval_minutes", value)}
+                options={[
+                  { value: "15", label: "15 minutes" },
+                  { value: "30", label: "30 minutes" },
+                  { value: "45", label: "45 minutes" },
+                  { value: "60", label: "60 minutes" },
+                ]}
+              />
             </div>
           </div>
-          {message ? <div className="mt-4"><FormMessage type={message.type}>{message.text}</FormMessage></div> : null}
-        </section>
+        </SettingsSection>
 
-        <section className="rounded-lg border border-gray-200 bg-white p-5 shadow-theme-sm">
-          <h2 className="text-lg font-semibold text-gray-900">Opening hours</h2>
-          <div className="mt-4 overflow-x-auto">
-            <table className="min-w-full divide-y divide-gray-200 text-sm">
+        <SettingsSection title="Opening hours" className="xl:col-span-2">
+          <div className="overflow-x-auto">
+            <table className="min-w-full divide-y divide-gray-200 text-sm dark:divide-gray-800">
               <thead>
-                <tr className="text-left text-xs uppercase text-gray-500">
+                <tr className="text-left text-xs uppercase text-gray-500 dark:text-gray-400">
                   <th className="px-3 py-2 font-medium">Day</th>
                   <th className="px-3 py-2 font-medium">Open</th>
                   <th className="px-3 py-2 font-medium">Close</th>
                   <th className="px-3 py-2 font-medium">Status</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-gray-100">
+              <tbody className="divide-y divide-gray-100 dark:divide-gray-800">
                 {openingHours.map((hours) => {
                   const day = Number(hours.day_of_week);
 
                   return (
                     <tr key={day}>
-                      <td className="px-3 py-3 font-medium text-gray-900">{dayLabels[day]}</td>
+                      <td className="px-3 py-3 font-medium text-gray-900 dark:text-white/90">{dayLabels[day]}</td>
                       <td className="px-3 py-3">
                         <input type="time" className={inputClass} value={String(hours.opens_at).slice(0, 5)} onChange={(event) => updateHours(day, "opens_at", event.target.value)} />
                       </td>
@@ -140,10 +543,15 @@ export default function SettingsPage() {
                         <input type="time" className={inputClass} value={String(hours.closes_at).slice(0, 5)} onChange={(event) => updateHours(day, "closes_at", event.target.value)} />
                       </td>
                       <td className="px-3 py-3">
-                        <select className={selectClass} value={Number(hours.is_closed) ? "1" : "0"} onChange={(event) => updateHours(day, "is_closed", event.target.value === "1")}>
-                          <option value="0">Open</option>
-                          <option value="1">Closed</option>
-                        </select>
+                        <SelectInput
+                          value={Number(hours.is_closed) ? "1" : "0"}
+                          onChange={(value) => updateHours(day, "is_closed", value === "1")}
+                          ariaLabel={`${dayLabels[day]} status`}
+                          options={[
+                            { value: "0", label: "Open" },
+                            { value: "1", label: "Closed" },
+                          ]}
+                        />
                       </td>
                     </tr>
                   );
@@ -151,7 +559,7 @@ export default function SettingsPage() {
               </tbody>
             </table>
           </div>
-        </section>
+        </SettingsSection>
       </div>
     </>
   );

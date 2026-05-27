@@ -165,11 +165,13 @@ function Stepper({ step }: { step: number }) {
 function CalendarPanel({
   selectedDate,
   visibleMonth,
+  blockedDates,
   onMonthChange,
   onSelectDate,
 }: {
   selectedDate: string;
   visibleMonth: Date;
+  blockedDates: Set<string>;
   onMonthChange: (date: Date) => void;
   onSelectDate: (date: string) => void;
 }) {
@@ -219,14 +221,16 @@ function CalendarPanel({
             const selectedClass = day.iso === selectedDate ? "is-selected" : "";
             const todayClass = day.iso === todayIso() ? "is-today" : "";
             const mutedClass = !day.currentMonth ? "is-muted" : "";
+            const blockedClass = blockedDates.has(day.iso) ? "is-blocked" : "";
+            const disabled = day.disabled || blockedDates.has(day.iso);
 
             return (
               <button
                 key={day.iso}
                 type="button"
-                disabled={day.disabled}
+                disabled={disabled}
                 onClick={() => onSelectDate(day.iso)}
-                className={["public-booking-day", selectedClass, todayClass, mutedClass].join(" ")}
+                className={["public-booking-day", selectedClass, todayClass, mutedClass, blockedClass].join(" ")}
               >
                 {day.label}
               </button>
@@ -308,12 +312,27 @@ export default function PublicBooking() {
 
   const guestCount = Number(form.guest_count || 0);
   const activeService = services.find((service) => service.value === form.service);
+  const venueName = meta?.settings.venue_name || "Old Canberra Inn";
+  const venueImageUrl = meta?.settings.venue_image_url || "";
+  const blockedOnlineDateSet = useMemo(
+    () => new Set((meta?.online_booking_blocks || []).map((block) => block.block_date)),
+    [meta],
+  );
+  const tableBookingsEnabled = (meta?.settings.online_table_bookings_enabled ?? "1") !== "0";
+  const functionRequestsEnabled = (meta?.settings.online_function_requests_enabled ?? "1") !== "0";
+  const serviceEnabled = (serviceValue: BookingForm["service"]) =>
+    serviceValue === "function" ? functionRequestsEnabled : tableBookingsEnabled;
   const selectedAreaName =
     meta?.areas.find((area) => String(area.id) === form.preferred_area_id)?.name || "No preference";
   const policyMessage = useMemo(() => {
     const min = Number(meta?.settings.min_table_guests || 8);
     const max = Number(meta?.settings.max_table_guests || 29);
 
+    if (form.service && !serviceEnabled(form.service)) {
+      return form.service === "function"
+        ? "Online function requests are currently turned off."
+        : "Online table bookings are currently turned off.";
+    }
     if (!guestCount) {
       return "Please choose the number of guests.";
     }
@@ -326,6 +345,9 @@ export default function PublicBooking() {
     if (!form.date) {
       return "Please select a date.";
     }
+    if (blockedOnlineDateSet.has(form.date)) {
+      return "Online bookings are turned off for this date.";
+    }
     if (!form.service) {
       return "Please choose a service.";
     }
@@ -334,7 +356,7 @@ export default function PublicBooking() {
     }
 
     return null;
-  }, [form.date, form.service, form.time, guestCount, meta]);
+  }, [blockedOnlineDateSet, form.date, form.service, form.time, functionRequestsEnabled, guestCount, meta, tableBookingsEnabled]);
 
   const detailsComplete = Boolean(form.first_name && form.last_name && form.email && form.phone && form.terms_agreed);
 
@@ -377,6 +399,17 @@ export default function PublicBooking() {
   };
 
   const selectService = (service: (typeof services)[number]) => {
+    if (!serviceEnabled(service.value as BookingForm["service"])) {
+      setMessage({
+        type: "info",
+        text:
+          service.value === "function"
+            ? "Online function requests are currently turned off."
+            : "Online table bookings are currently turned off.",
+      });
+      return;
+    }
+
     const nextForm = {
       ...form,
       service: service.value as BookingForm["service"],
@@ -516,8 +549,12 @@ export default function PublicBooking() {
           <LogIn size={17} />
           Manager
         </Link>
-        <div className="public-booking-logo">OCI</div>
-        <p className="public-booking-name">Old Canberra Inn</p>
+        {venueImageUrl ? (
+          <img src={venueImageUrl} alt={venueName} className="public-booking-venue-image" />
+        ) : (
+          <div className="public-booking-logo">OCI</div>
+        )}
+        <p className="public-booking-name">{venueName}</p>
       </header>
 
       {confirmation ? (
@@ -559,6 +596,7 @@ export default function PublicBooking() {
             <CalendarPanel
               selectedDate={form.date}
               visibleMonth={visibleMonth}
+              blockedDates={blockedOnlineDateSet}
               onMonthChange={setVisibleMonth}
               onSelectDate={(date) => updateField("date", date)}
             />
@@ -606,10 +644,12 @@ export default function PublicBooking() {
                     <button
                       key={service.label}
                       type="button"
+                      disabled={!serviceEnabled(service.value as BookingForm["service"])}
                       onClick={() => selectService(service)}
                       className={[
                         "public-booking-service",
                         activeService?.label === service.label ? "is-selected" : "",
+                        !serviceEnabled(service.value as BookingForm["service"]) ? "is-disabled" : "",
                       ].join(" ")}
                     >
                       {service.label}
@@ -754,7 +794,7 @@ export default function PublicBooking() {
                   checked={form.marketing_consent}
                   onChange={(checked) => updateBoolean("marketing_consent", checked)}
                 >
-                  I agree to receive special invitations and updates from Old Canberra Inn
+                  I agree to receive special invitations and updates from {venueName}
                 </CheckboxField>
                 <CheckboxField
                   id="terms_agreed"
@@ -781,7 +821,7 @@ export default function PublicBooking() {
               <div className="public-booking-summary">
                 <p className="public-booking-summary-row">
                   <span className="public-booking-summary-label">Venue</span>
-                  <span>Old Canberra Inn</span>
+                  <span>{venueName}</span>
                 </p>
                 <p className="public-booking-summary-row">
                   <span className="public-booking-summary-label">Guests</span>

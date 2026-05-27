@@ -10,19 +10,15 @@ import {
   MapPin,
   Phone,
   Plus,
-  RefreshCw,
   Save,
-  Search,
   Users,
   X,
 } from "lucide-react";
 import { apiFetch, toJsonBody } from "../lib/api";
 import type { Area, Booking, MetaPayload, Paginated } from "../types";
-import { FieldLabel, FormMessage, inputClass, selectClass, textareaClass } from "../components/resrva/FormField";
+import { FieldLabel, FormMessage, SelectInput, inputClass, textareaClass } from "../components/resrva/FormField";
 import { LoadingState } from "../components/resrva/LoadingState";
-import { PageHeader } from "../components/resrva/PageHeader";
 import { StatusBadge } from "../components/resrva/StatusBadge";
-import Badge from "../components/ui/badge/Badge";
 
 const functionStatuses = ["pending", "approved", "confirmed", "declined", "cancelled"] as const;
 const dateScopeTabs = [
@@ -30,9 +26,17 @@ const dateScopeTabs = [
   { label: "Upcoming", value: "upcoming" },
   { label: "Past", value: "past" },
 ] as const;
+const detailLabelClass = "mb-1.5 block text-sm font-medium text-gray-700 dark:text-gray-300";
+const detailSectionTitleClass = "text-base font-medium text-gray-800 dark:text-white/90";
 
 type DateScope = (typeof dateScopeTabs)[number]["value"];
 type FunctionEditState = {
+  date: string;
+  time: string;
+  end_time: string;
+  guest_count: string;
+  event_type: string;
+  preferred_area_id: string;
   status: string;
   assigned_area_ids: string[];
   staff_notes: string;
@@ -114,6 +118,20 @@ function formatTime(value: string): string {
   return `${displayHours}:${minutesText} ${suffix}`;
 }
 
+function minutesFromTime(value: string): number {
+  const [hoursText, minutesText] = value.split(":");
+  const hours = Number(hoursText);
+  const minutes = Number(minutesText);
+
+  if (!Number.isFinite(hours) || !Number.isFinite(minutes)) return Number.NaN;
+
+  return hours * 60 + minutes;
+}
+
+function minutesBetween(start: string, end: string): number {
+  return minutesFromTime(end) - minutesFromTime(start);
+}
+
 function statusLabel(status: string): string {
   return status
     .replace("_", " ")
@@ -135,6 +153,12 @@ function assignedAreaLabel(booking: Booking): string {
 
 function editForBooking(booking: Booking): FunctionEditState {
   return {
+    date: booking.booking_date,
+    time: booking.start_time.slice(0, 5),
+    end_time: booking.end_time.slice(0, 5),
+    guest_count: String(booking.guest_count),
+    event_type: booking.event_type || "",
+    preferred_area_id: booking.preferred_area_id ? String(booking.preferred_area_id) : "",
     status: booking.status,
     assigned_area_ids: parseIds(booking.assigned_area_ids || (booking.assigned_area_id ? String(booking.assigned_area_id) : "")),
     staff_notes: booking.staff_notes || "",
@@ -184,21 +208,6 @@ function FunctionAreaPicker({
           </button>
         );
       })}
-    </div>
-  );
-}
-
-function DetailItem({
-  label,
-  value,
-}: {
-  label: string;
-  value: React.ReactNode;
-}) {
-  return (
-    <div className="rounded-xl border border-gray-200 bg-gray-50 px-4 py-3 dark:border-gray-800 dark:bg-white/[0.03]">
-      <dt className="text-xs font-medium uppercase text-gray-500 dark:text-gray-400">{label}</dt>
-      <dd className="mt-1 text-sm font-semibold text-gray-900 dark:text-white/90">{value}</dd>
     </div>
   );
 }
@@ -348,11 +357,6 @@ export default function FunctionsPage() {
     setEdits((current) => ({ ...current, [booking.id]: { ...editFor(booking), ...patch } }));
   };
 
-  const updateFilter = (field: "search" | "status", value: string) => {
-    setPage(1);
-    setFilters((current) => ({ ...current, [field]: value }));
-  };
-
   const updateCreateForm = <K extends keyof FunctionCreateForm>(field: K, value: FunctionCreateForm[K]) => {
     setCreateForm((current) => ({ ...current, [field]: value }));
   };
@@ -423,7 +427,19 @@ export default function FunctionsPage() {
 
   const saveFunction = async (booking: Booking) => {
     const edit = editFor(booking);
+    const guestCount = Number(edit.guest_count);
+    const durationMinutes = minutesBetween(edit.time, edit.end_time);
     setMessage(null);
+
+    if (!edit.date || !edit.time || !edit.end_time || !Number.isFinite(guestCount) || guestCount < 1) {
+      setMessage({ type: "error", text: "Enter a valid date, time, and guest count." });
+      return;
+    }
+
+    if (!Number.isFinite(durationMinutes) || durationMinutes < 120) {
+      setMessage({ type: "error", text: "Function time must be at least 2 hours." });
+      return;
+    }
 
     if (["approved", "confirmed"].includes(edit.status) && edit.assigned_area_ids.length === 0) {
       setMessage({ type: "error", text: "Select at least one function area before approving." });
@@ -434,6 +450,12 @@ export default function FunctionsPage() {
       await apiFetch<{ item: Booking }>(`functions/${booking.id}`, {
         method: "PUT",
         ...toJsonBody({
+          date: edit.date,
+          time: edit.time,
+          duration_minutes: durationMinutes,
+          guest_count: guestCount,
+          event_type: edit.event_type.trim(),
+          preferred_area_id: edit.preferred_area_id || null,
           status: edit.status,
           assigned_area_ids: edit.assigned_area_ids.map(Number),
           assigned_area_id: edit.assigned_area_ids[0] || null,
@@ -465,30 +487,6 @@ export default function FunctionsPage() {
 
   return (
     <>
-      <PageHeader
-        title="Functions"
-        action={
-          <>
-            <button
-              type="button"
-              onClick={openCreateModal}
-              className="inline-flex h-10 items-center gap-2 rounded-lg bg-brand-500 px-4 text-sm font-medium text-white shadow-theme-xs hover:bg-brand-600"
-            >
-              <Plus className="size-4" />
-              Create function
-            </button>
-            <button
-              type="button"
-              onClick={loadFunctions}
-              className="inline-flex h-10 items-center gap-2 rounded-lg border border-gray-300 bg-white px-3 text-sm font-medium text-gray-700 shadow-theme-xs hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-300 dark:hover:bg-white/[0.04]"
-            >
-              <RefreshCw className="size-4" />
-              Refresh
-            </button>
-          </>
-        }
-      />
-
       {isCreateOpen ? (
         <div
           className="fixed inset-0 z-999999 flex items-center justify-center overflow-y-auto bg-black/40 px-4 py-4"
@@ -575,17 +573,17 @@ export default function FunctionsPage() {
                     </div>
                     <div>
                       <FieldLabel htmlFor="create-function-duration">Duration</FieldLabel>
-                      <select
+                      <SelectInput
                         id="create-function-duration"
-                        className={selectClass}
                         value={createForm.duration_minutes}
-                        onChange={(event) => updateCreateForm("duration_minutes", event.target.value)}
-                      >
-                        <option value="120">2 hours</option>
-                        <option value="180">3 hours</option>
-                        <option value="240">4 hours</option>
-                        <option value="300">5 hours</option>
-                      </select>
+                        onChange={(value) => updateCreateForm("duration_minutes", value)}
+                        options={[
+                          { value: "120", label: "2 hours" },
+                          { value: "180", label: "3 hours" },
+                          { value: "240", label: "4 hours" },
+                          { value: "300", label: "5 hours" },
+                        ]}
+                      />
                     </div>
                     <div>
                       <FieldLabel htmlFor="create-function-guests">Guests</FieldLabel>
@@ -611,18 +609,15 @@ export default function FunctionsPage() {
                     </div>
                     <div>
                       <FieldLabel htmlFor="create-function-status">Status</FieldLabel>
-                      <select
+                      <SelectInput
                         id="create-function-status"
-                        className={selectClass}
                         value={createForm.status}
-                        onChange={(event) => updateCreateForm("status", event.target.value)}
-                      >
-                        {functionStatuses.map((status) => (
-                          <option key={status} value={status}>
-                            {statusLabel(status)}
-                          </option>
-                        ))}
-                      </select>
+                        onChange={(value) => updateCreateForm("status", value)}
+                        options={functionStatuses.map((status) => ({
+                          value: status,
+                          label: statusLabel(status),
+                        }))}
+                      />
                     </div>
                   </div>
                 </section>
@@ -683,65 +678,43 @@ export default function FunctionsPage() {
         </div>
       ) : null}
 
-      <section className="rounded-2xl border border-gray-200 bg-white p-4 shadow-theme-xs dark:border-gray-800 dark:bg-white/[0.03] sm:p-5">
-        <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
-          <div className="inline-flex w-fit rounded-xl bg-gray-100 p-1 dark:bg-gray-800">
-            {dateScopeTabs.map((tab) => (
-              <button
-                key={tab.value}
-                type="button"
-                onClick={() => updateDateScope(tab.value)}
-                className={`h-10 rounded-lg px-4 text-sm font-medium transition ${
-                  filters.date_scope === tab.value
-                    ? "bg-white text-brand-500 shadow-theme-xs dark:bg-gray-900 dark:text-brand-400"
-                    : "text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"
-                }`}
-              >
-                {tab.label}
-              </button>
-            ))}
-          </div>
-
-          <div className="grid w-full gap-3 md:grid-cols-[minmax(220px,1fr)_180px_auto] xl:max-w-3xl">
-            <div className="relative">
-              <Search className="absolute left-3.5 top-1/2 size-5 -translate-y-1/2 text-gray-400" />
-              <input
-                className={`${inputClass} pl-11`}
-                placeholder="Search name, email, phone, or ref"
-                value={filters.search}
-                onChange={(event) => updateFilter("search", event.target.value)}
-              />
-            </div>
-            <select
-              className={selectClass}
-              value={filters.status}
-              onChange={(event) => updateFilter("status", event.target.value)}
-              aria-label="Status filter"
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="inline-flex w-fit rounded-xl bg-gray-100 p-1 dark:bg-gray-800">
+          {dateScopeTabs.map((tab) => (
+            <button
+              key={tab.value}
+              type="button"
+              onClick={() => updateDateScope(tab.value)}
+              className={`h-10 rounded-lg px-4 text-sm font-medium transition ${
+                filters.date_scope === tab.value
+                  ? "bg-white text-brand-500 shadow-theme-xs dark:bg-gray-900 dark:text-brand-400"
+                  : "text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"
+              }`}
             >
-              <option value="">All statuses</option>
-              {functionStatuses.map((status) => (
-                <option key={status} value={status}>
-                  {statusLabel(status)}
-                </option>
-              ))}
-            </select>
-            <Badge color="light" size="sm">
-              {data.meta.total} total
-            </Badge>
-          </div>
+              {tab.label}
+            </button>
+          ))}
         </div>
+        <button
+          type="button"
+          onClick={openCreateModal}
+          className="inline-flex h-10 w-fit items-center gap-2 rounded-lg bg-brand-500 px-4 text-sm font-medium text-white shadow-theme-xs hover:bg-brand-600"
+        >
+          <Plus className="size-4" />
+          Create function
+        </button>
+      </div>
 
-        {message ? (
-          <div className="mt-4">
-            <FormMessage type={message.type}>{message.text}</FormMessage>
-          </div>
-        ) : null}
-      </section>
+      {message ? (
+        <div className="mt-4">
+          <FormMessage type={message.type}>{message.text}</FormMessage>
+        </div>
+      ) : null}
 
       <div className="mt-5 grid gap-5 xl:grid-cols-[minmax(360px,0.85fr)_minmax(0,1.45fr)]">
         <section className="overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-theme-xs dark:border-gray-800 dark:bg-white/[0.03]">
           <div className="flex items-center justify-between border-b border-gray-200 px-4 py-3 dark:border-gray-800">
-            <p className="text-base font-semibold text-gray-900 dark:text-white/90">Function requests</p>
+            <p className="text-base font-semibold text-gray-900 dark:text-white/90">Requests</p>
             <span className="rounded-full bg-gray-100 px-2.5 py-1 text-xs font-medium text-gray-600 dark:bg-gray-800 dark:text-gray-300">
               {data.items.length} shown
             </span>
@@ -855,39 +828,114 @@ export default function FunctionsPage() {
                 </button>
               </div>
 
-              <div className="max-h-[calc(100vh-16rem)] overflow-y-auto p-5">
-                <dl className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-                  <DetailItem label="Date" value={formatDate(selectedBooking.booking_date)} />
-                  <DetailItem
-                    label="Time"
-                    value={`${formatTime(selectedBooking.start_time)} - ${formatTime(selectedBooking.end_time)}`}
-                  />
-                  <DetailItem label="Guests" value={selectedBooking.guest_count} />
-                  <DetailItem label="Event" value={selectedBooking.event_type || "Function"} />
-                  <DetailItem label="Preferred" value={selectedBooking.preferred_area_name || "-"} />
-                  <DetailItem label="Assigned" value={assignedAreaLabel(selectedBooking)} />
-                </dl>
+              <div className="max-h-[calc(100vh-16rem)] overflow-y-auto">
+                <div className="border-b border-gray-100 px-5 py-5 dark:border-gray-800">
+                  <h3 className={detailSectionTitleClass}>Details</h3>
 
-                <div className="mt-5 grid gap-5 lg:grid-cols-[0.8fr_1.2fr]">
+                  <div className="mt-5 grid gap-x-5 gap-y-5 lg:grid-cols-2">
+                    <div>
+                      <label htmlFor="function-detail-date" className={detailLabelClass}>
+                        Date
+                      </label>
+                      <SingleDatePicker
+                        id="function-detail-date"
+                        value={selectedEdit.date}
+                        required
+                        onChange={(value) => updateEdit(selectedBooking, { date: value })}
+                      />
+                    </div>
+
+                    <div>
+                      <label htmlFor="function-detail-time" className={detailLabelClass}>
+                        Time
+                      </label>
+                      <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-2">
+                        <input
+                          id="function-detail-time"
+                          type="time"
+                          step="900"
+                          required
+                          aria-label="Start time"
+                          className={inputClass}
+                          value={selectedEdit.time}
+                          onChange={(event) => updateEdit(selectedBooking, { time: event.target.value })}
+                        />
+                        <span className="text-sm font-medium text-gray-400 dark:text-gray-500">to</span>
+                        <input
+                          type="time"
+                          step="900"
+                          required
+                          aria-label="End time"
+                          className={inputClass}
+                          value={selectedEdit.end_time}
+                          onChange={(event) => updateEdit(selectedBooking, { end_time: event.target.value })}
+                        />
+                      </div>
+                    </div>
+
+                    <div>
+                      <label htmlFor="function-detail-guests" className={detailLabelClass}>
+                        Guests
+                      </label>
+                      <input
+                        id="function-detail-guests"
+                        type="number"
+                        min="1"
+                        className={inputClass}
+                        value={selectedEdit.guest_count}
+                        onChange={(event) => updateEdit(selectedBooking, { guest_count: event.target.value })}
+                      />
+                    </div>
+
+                    <div>
+                      <label htmlFor="function-detail-event" className={detailLabelClass}>
+                        Event
+                      </label>
+                      <input
+                        id="function-detail-event"
+                        className={inputClass}
+                        value={selectedEdit.event_type}
+                        onChange={(event) => updateEdit(selectedBooking, { event_type: event.target.value })}
+                      />
+                    </div>
+
+                    <div>
+                      <label htmlFor="function-detail-preferred" className={detailLabelClass}>
+                        Preferred
+                      </label>
+                      <SelectInput
+                        id="function-detail-preferred"
+                        value={selectedEdit.preferred_area_id}
+                        onChange={(value) => updateEdit(selectedBooking, { preferred_area_id: value })}
+                        options={[
+                          { value: "", label: "-" },
+                          ...meta.function_areas.map((area) => ({ value: String(area.id), label: area.name })),
+                        ]}
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                <div className="grid gap-6 border-b border-gray-100 px-5 py-5 dark:border-gray-800 lg:grid-cols-[0.8fr_1.2fr]">
                   <div className="space-y-4">
                     <div>
                       <FieldLabel htmlFor="function-detail-status">Status</FieldLabel>
-                      <select
+                      <SelectInput
                         id="function-detail-status"
-                        className={selectClass}
                         value={selectedEdit.status}
-                        onChange={(event) => updateEdit(selectedBooking, { status: event.target.value })}
-                      >
-                        {functionStatuses.map((status) => (
-                          <option key={status} value={status}>
-                            {statusLabel(status)}
-                          </option>
-                        ))}
-                      </select>
+                        onChange={(value) => updateEdit(selectedBooking, { status: value })}
+                        className="max-w-[220px]"
+                        menuClassName="min-w-[220px]"
+                        options={functionStatuses.map((status) => ({
+                          value: status,
+                          label: statusLabel(status),
+                        }))}
+                      />
                     </div>
 
-                    <div className="rounded-xl border border-gray-200 p-4 dark:border-gray-800">
-                      <div className="space-y-3 text-sm">
+                    <div className="border-t border-gray-100 pt-4 dark:border-gray-800">
+                      <h3 className={detailSectionTitleClass}>Contact</h3>
+                      <div className="mt-3 space-y-3 text-sm">
                         <p className="flex items-center gap-2 text-gray-600 dark:text-gray-400">
                           <Mail className="size-4 text-gray-400" />
                           {selectedBooking.customer_email}
@@ -901,8 +949,8 @@ export default function FunctionsPage() {
                   </div>
 
                   <div>
-                    <FieldLabel htmlFor="function-detail-areas">Areas</FieldLabel>
-                    <div id="function-detail-areas">
+                    <h3 className={detailSectionTitleClass}>Areas</h3>
+                    <div id="function-detail-areas" className="mt-4">
                       <FunctionAreaPicker
                         areas={meta.function_areas}
                         selectedIds={selectedEdit.assigned_area_ids}
@@ -912,7 +960,7 @@ export default function FunctionsPage() {
                   </div>
                 </div>
 
-                <div className="mt-5 grid gap-5 lg:grid-cols-2">
+                <div className="grid gap-5 px-5 py-5 lg:grid-cols-2">
                   <div>
                     <FieldLabel htmlFor="function-notes">Guest note</FieldLabel>
                     <div

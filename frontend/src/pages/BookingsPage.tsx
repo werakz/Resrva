@@ -24,8 +24,8 @@ import type { Area, Booking, MetaPayload, Paginated, TableRecord } from "../type
 import {
   FieldLabel,
   FormMessage,
+  SelectInput,
   inputClass,
-  selectClass,
   textareaClass,
 } from "../components/resrva/FormField";
 import { LoadingState } from "../components/resrva/LoadingState";
@@ -147,24 +147,23 @@ type SortKey = (typeof sortOptions)[number]["value"];
 const tableStatuses = ["confirmed", "seated", "completed", "cancelled", "no_show"];
 const functionStatuses = ["pending", "approved", "confirmed", "declined", "cancelled"];
 const compactInputClass = `${inputClass} h-10 py-2`;
-const compactSelectClass = `${selectClass} h-10 py-2`;
 const compactTextareaClass = `${textareaClass} min-h-[72px] py-2`;
 
 const statusControlStyles: Record<string, string> = {
   confirmed:
-    "border-success-200 bg-success-50 text-success-600 dark:border-success-500/20 dark:bg-success-500/15 dark:text-success-500",
+    "!border-success-200 !bg-success-50 !text-success-600 dark:!border-success-500/20 dark:!bg-success-500/15 dark:!text-success-500",
   approved:
-    "border-success-200 bg-success-50 text-success-600 dark:border-success-500/20 dark:bg-success-500/15 dark:text-success-500",
+    "!border-success-200 !bg-success-50 !text-success-600 dark:!border-success-500/20 dark:!bg-success-500/15 dark:!text-success-500",
   pending:
-    "border-warning-200 bg-warning-50 text-warning-600 dark:border-warning-500/20 dark:bg-warning-500/15 dark:text-orange-400",
+    "!border-warning-200 !bg-warning-50 !text-warning-600 dark:!border-warning-500/20 dark:!bg-warning-500/15 dark:!text-orange-400",
   seated:
-    "border-blue-light-200 bg-blue-light-50 text-blue-light-500 dark:border-blue-light-500/20 dark:bg-blue-light-500/15 dark:text-blue-light-500",
-  completed: "border-gray-200 bg-gray-100 text-gray-700 dark:border-gray-700 dark:bg-white/5 dark:text-white/80",
+    "!border-blue-light-200 !bg-blue-light-50 !text-blue-light-500 dark:!border-blue-light-500/20 dark:!bg-blue-light-500/15 dark:!text-blue-light-500",
+  completed: "!border-gray-200 !bg-gray-100 !text-gray-700 dark:!border-gray-700 dark:!bg-white/5 dark:!text-white/80",
   cancelled:
-    "border-error-200 bg-error-50 text-error-600 dark:border-error-500/20 dark:bg-error-500/15 dark:text-error-500",
+    "!border-error-200 !bg-error-50 !text-error-600 dark:!border-error-500/20 dark:!bg-error-500/15 dark:!text-error-500",
   declined:
-    "border-error-200 bg-error-50 text-error-600 dark:border-error-500/20 dark:bg-error-500/15 dark:text-error-500",
-  no_show: "border-gray-200 bg-gray-100 text-gray-700 dark:border-gray-700 dark:bg-white/5 dark:text-white/80",
+    "!border-error-200 !bg-error-50 !text-error-600 dark:!border-error-500/20 dark:!bg-error-500/15 dark:!text-error-500",
+  no_show: "!border-gray-200 !bg-gray-100 !text-gray-700 dark:!border-gray-700 dark:!bg-white/5 dark:!text-white/80",
 };
 
 function todayIso() {
@@ -947,22 +946,20 @@ function BookingRow({
         </p>
       </TableCell>
       <TableCell className="px-5 py-4 text-start">
-        <div className="relative inline-flex min-w-[132px] items-center">
-          <select
-            className={`h-8 w-full appearance-none rounded-full border py-1 pl-3 pr-8 text-center text-theme-xs font-medium capitalize shadow-theme-xs outline-hidden focus:ring-3 focus:ring-brand-500/10 ${
-              statusControlStyles[statusValue] || "border-gray-200 bg-gray-50 text-gray-700"
-            }`}
-            value={statusValue}
-            onChange={(event) => onStatusChange(event.target.value)}
-          >
-            {statusOptionsFor(booking).map((status) => (
-              <option key={status} value={status}>
-                {status.replace("_", " ")}
-              </option>
-            ))}
-          </select>
-          <ChevronDown className="pointer-events-none absolute right-3 size-3.5 text-gray-400" />
-        </div>
+        <SelectInput
+          value={statusValue}
+          onChange={onStatusChange}
+          ariaLabel={`${booking.booking_reference} status`}
+          className="inline-flex min-w-[132px]"
+          buttonClassName={`!h-8 !rounded-full !py-1 !pl-3 !pr-2 text-center text-theme-xs font-medium capitalize ${
+            statusControlStyles[statusValue] || "border-gray-200 bg-gray-50 text-gray-700"
+          }`}
+          menuClassName="min-w-[160px]"
+          options={statusOptionsFor(booking).map((status) => ({
+            value: status,
+            label: status.replace("_", " "),
+          }))}
+        />
       </TableCell>
       <TableCell className="px-5 py-4 text-start">
         <p
@@ -1690,18 +1687,16 @@ export default function BookingsPage() {
                       </div>
                       <div>
                         <FieldLabel htmlFor="edit-status">Status</FieldLabel>
-                        <select
+                        <SelectInput
                           id="edit-status"
-                          className={compactSelectClass}
                           value={editForm.status || editingBooking.status}
-                          onChange={(event) => updateEditForm("status", event.target.value)}
-                        >
-                          {statusOptionsFor(editingBooking).map((status) => (
-                            <option key={status} value={status}>
-                              {status.replace("_", " ")}
-                            </option>
-                          ))}
-                        </select>
+                          onChange={(value) => updateEditForm("status", value)}
+                          buttonClassName="!h-10 !py-2"
+                          options={statusOptionsFor(editingBooking).map((status) => ({
+                            value: status,
+                            label: status.replace("_", " "),
+                          }))}
+                        />
                       </div>
                       <div>
                         <FieldLabel htmlFor="edit-date">Date</FieldLabel>
