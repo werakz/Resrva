@@ -273,7 +273,7 @@ layer(base);
   }
 
   &::-webkit-scrollbar-thumb {
-    @apply bg-gray-200 rounded-full dark:bg-gray-700;
+    @apply bg-gray-200 rounded-full;
   }
 }
 .dark .custom-scrollbar::-webkit-scrollbar-thumb {
@@ -347,47 +347,6 @@ layer(base);
 
 #chartDarkStyle .apexcharts-datalabels-group .apexcharts-text {
   @apply !fill-gray-800 !font-semibold dark:!fill-white/90;
-}
-
-#chartSixteen .apexcharts-legend {
-  @apply !p-0 !pl-6;
-}
-
-.jvectormap-container {
-  @apply !bg-gray-50 dark:!bg-gray-900;
-}
-.jvectormap-region.jvectormap-element {
-  @apply !fill-gray-300 hover:!fill-brand-500 dark:!fill-gray-700 dark:hover:!fill-brand-500;
-}
-.jvectormap-marker.jvectormap-element {
-  @apply !stroke-gray-200 dark:!stroke-gray-800;
-}
-.jvectormap-tip {
-  @apply !bg-brand-500 !border-none !px-2 !py-1;
-}
-.jvectormap-zoomin,
-.jvectormap-zoomout {
-  @apply !hidden;
-}
-
-.stocks-slider-outer .swiper-button-next:after,
-.stocks-slider-outer .swiper-button-prev:after {
-  @apply hidden;
-}
-
-.stocks-slider-outer .swiper-button-next,
-.stocks-slider-outer .swiper-button-prev {
-  @apply static! mt-0 h-8 w-9 rounded-full border dark:hover:bg-white/[0.05] border-gray-200 !text-gray-700 transition hover:bg-gray-100 dark:border-white/[0.03] dark:bg-gray-800 dark:!text-gray-400  dark:hover:!text-white/90;
-}
-
-.stocks-slider-outer .swiper-button-next.swiper-button-disabled,
-.stocks-slider-outer .swiper-button-prev.swiper-button-disabled {
-  @apply bg-white opacity-50 dark:bg-gray-900;
-}
-
-.stocks-slider-outer .swiper-button-next svg,
-.stocks-slider-outer .swiper-button-prev svg {
-  @apply !h-auto !w-auto;
 }
 
 .flatpickr-wrapper {
@@ -723,55 +682,6 @@ span.flatpickr-weekday,
   -webkit-appearance: none;
 }
 
-.swiper-button-prev svg,
-.swiper-button-next svg {
-  @apply !h-auto !w-auto;
-}
-
-.carouselTwo .swiper-button-next:after,
-.carouselTwo .swiper-button-prev:after,
-.carouselFour .swiper-button-next:after,
-.carouselFour .swiper-button-prev:after {
-  @apply hidden;
-}
-.carouselTwo .swiper-button-next.swiper-button-disabled,
-.carouselTwo .swiper-button-prev.swiper-button-disabled,
-.carouselFour .swiper-button-next.swiper-button-disabled,
-.carouselFour .swiper-button-prev.swiper-button-disabled {
-  @apply bg-white/60 !opacity-100;
-}
-.carouselTwo .swiper-button-next,
-.carouselTwo .swiper-button-prev,
-.carouselFour .swiper-button-next,
-.carouselFour .swiper-button-prev {
-  @apply h-10 w-10 rounded-full border-[0.5px] border-white/10 bg-white/90 !text-gray-700 shadow-slider-navigation backdrop-blur-[10px];
-}
-
-.carouselTwo .swiper-button-prev,
-.carouselFour .swiper-button-prev {
-  @apply !left-3 sm:!left-4;
-}
-
-.carouselTwo .swiper-button-next,
-.carouselFour .swiper-button-next {
-  @apply !right-3 sm:!right-4;
-}
-
-.carouselThree .swiper-pagination,
-.carouselFour .swiper-pagination {
-  @apply !bottom-3 !left-1/2 inline-flex !w-auto -translate-x-1/2 items-center gap-1.5 rounded-[40px] border-[0.5px] border-white/10 bg-white/60 px-2 py-1.5 shadow-slider-navigation backdrop-blur-[10px] sm:!bottom-5;
-}
-
-.carouselThree .swiper-pagination-bullet,
-.carouselFour .swiper-pagination-bullet {
-  @apply !m-0 h-2.5 w-2.5 bg-white opacity-100 shadow-theme-xs duration-200 ease-in-out;
-}
-
-.carouselThree .swiper-pagination-bullet-active,
-.carouselFour .swiper-pagination-bullet-active {
-  @apply w-6.5 rounded-xl;
-}
-
 .form-check-input:checked ~ span {
   @apply border-[6px] border-brand-500 bg-brand-500 dark:border-brand-500;
 }
@@ -808,7 +718,7 @@ span.flatpickr-weekday,
 }
 
 .simplebar-scrollbar::before {
-  @apply !bg-gray-200 !rounded-full dark:!bg-gray-700 !opacity-100;
+  @apply !bg-gray-200 !rounded-full !opacity-100;
 }
 
 .dark .simplebar-scrollbar::before {

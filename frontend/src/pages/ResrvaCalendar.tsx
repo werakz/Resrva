@@ -232,7 +232,7 @@ export default function ResrvaCalendar() {
 
     for (const table of tablesData.tables) {
       const tableId = Number(table.id);
-      if (!Boolean(Number(table.active))) {
+      if (!Number(table.active)) {
         continue;
       }
 

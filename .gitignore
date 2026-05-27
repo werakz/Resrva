@@ -9,3 +9,4 @@ frontend/dist/
 frontend/.vite/
 frontend/*.tsbuildinfo
 *.log
+.codex-run/

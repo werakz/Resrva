@@ -23,6 +23,8 @@ const defaultSettings: Record<string, string> = {
   venue_email: "manager@oldcanberrainn.com.au",
   venue_image_url: "",
   booking_policy_note: "Online bookings are for groups of 8 or more. Smaller groups are welcome to walk in.",
+  booking_terms_and_conditions:
+    "Bookings are subject to venue availability and confirmation.\n\nPlease arrive on time for your booking. Tables may be released if guests arrive late without contacting the venue.\n\nGuest numbers should be accurate at the time of booking. If your party size changes, please contact the venue before your visit.\n\nSpecial requests are noted but cannot be guaranteed. The venue will do its best to accommodate seating preferences, accessibility needs, allergies, and dietary requirements when notified in advance.\n\nThe venue may contact you using the details provided to confirm, update, or manage your booking.\n\nThe venue may cancel or amend bookings where required due to operational needs, private events, safety requirements, or incorrect booking information.\n\nBy submitting a booking, you agree to these terms and confirm that the details provided are accurate.",
   online_table_bookings_enabled: "1",
   online_function_requests_enabled: "1",
 };
@@ -137,6 +139,7 @@ function AnnualClosedDatesPicker({
   const inputRef = useRef<HTMLInputElement | null>(null);
   const pickerRef = useRef<FlatpickrInstance | null>(null);
   const onChangeRef = useRef(onChange);
+  const initialValueRef = useRef(value);
   const initialDatesRef = useRef(parseClosedMonthDays(value).map(pickerDateFromMonthDay));
 
   useEffect(() => {
@@ -164,7 +167,7 @@ function AnnualClosedDatesPicker({
     if (!Array.isArray(picker)) {
       pickerRef.current = picker;
       if (inputRef.current) {
-        inputRef.current.value = closedDatesDisplay(value);
+        inputRef.current.value = closedDatesDisplay(initialValueRef.current);
       }
     }
 
@@ -417,6 +420,15 @@ export default function SettingsPage() {
                 className={`${textareaClass} min-h-28`}
                 value={settingValue("booking_policy_note")}
                 onChange={(event) => updateSetting("booking_policy_note", event.target.value)}
+              />
+            </div>
+            <div>
+              <FieldLabel htmlFor="booking-terms">Terms and conditions</FieldLabel>
+              <textarea
+                id="booking-terms"
+                className={`${textareaClass} min-h-56`}
+                value={settingValue("booking_terms_and_conditions")}
+                onChange={(event) => updateSetting("booking_terms_and_conditions", event.target.value)}
               />
             </div>
           </div>

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { Mail, Save, Sparkles, X } from "lucide-react";
 import { apiFetch, toJsonBody } from "../../lib/api";
@@ -51,9 +51,9 @@ export function AiReplyComposer({
   const [logging, setLogging] = useState(false);
   const [message, setMessage] = useState<{ type: "error" | "success" | "info"; text: string } | null>(null);
 
-  const defaultPurpose = (): ReplyPurpose => replyPurposeForStatus(booking.status);
+  const defaultPurpose = useCallback((): ReplyPurpose => replyPurposeForStatus(booking.status), [booking.status]);
 
-  const generateDraft = async (draftPurpose = purpose, draftInstructions = instructions) => {
+  const generateDraft = useCallback(async (draftPurpose = purpose, draftInstructions = instructions) => {
     setDrafting(true);
     setMessage(null);
 
@@ -69,9 +69,9 @@ export function AiReplyComposer({
     } finally {
       setDrafting(false);
     }
-  };
+  }, [booking.id, instructions, purpose]);
 
-  const openComposer = (requestedPurpose?: ReplyPurpose) => {
+  const openComposer = useCallback((requestedPurpose?: ReplyPurpose) => {
     const initialPurpose = requestedPurpose || defaultPurpose();
 
     setPurpose(initialPurpose);
@@ -81,13 +81,13 @@ export function AiReplyComposer({
     setMessage(null);
     setIsOpen(true);
     void generateDraft(initialPurpose, "");
-  };
+  }, [defaultPurpose, generateDraft]);
 
   useEffect(() => {
     if (!openRequest) return;
 
     openComposer(openRequest.purpose);
-  }, [openRequest?.token]);
+  }, [openComposer, openRequest]);
 
   const logReply = async () => {
     if (!subject.trim() || !body.trim()) {

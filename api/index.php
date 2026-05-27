@@ -242,6 +242,7 @@ function settings_defaults(): array
         'venue_email' => 'manager@oldcanberrainn.com.au',
         'venue_image_url' => '',
         'booking_policy_note' => 'Online bookings are for groups of 8 or more. Smaller groups are welcome to walk in.',
+        'booking_terms_and_conditions' => "Bookings are subject to venue availability and confirmation.\n\nPlease arrive on time for your booking. Tables may be released if guests arrive late without contacting the venue.\n\nGuest numbers should be accurate at the time of booking. If your party size changes, please contact the venue before your visit.\n\nSpecial requests are noted but cannot be guaranteed. The venue will do its best to accommodate seating preferences, accessibility needs, allergies, and dietary requirements when notified in advance.\n\nThe venue may contact you using the details provided to confirm, update, or manage your booking.\n\nThe venue may cancel or amend bookings where required due to operational needs, private events, safety requirements, or incorrect booking information.\n\nBy submitting a booking, you agree to these terms and confirm that the details provided are accurate.",
         'online_table_bookings_enabled' => '1',
         'online_function_requests_enabled' => '1',
     ];

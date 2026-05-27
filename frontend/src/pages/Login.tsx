@@ -44,12 +44,10 @@ export default function Login() {
 
         <form onSubmit={submitLogin} className="rounded-lg border border-gray-200 bg-white p-6 shadow-theme-lg">
           <div className="mb-6">
-            <div className="mb-4 flex size-12 items-center justify-center rounded-lg bg-brand-600 text-lg font-semibold text-white">
-              R
-            </div>
+            <img src="/images/logo/resrva-mark.svg" alt="Resrva" className="mb-4 size-12 rounded-lg" />
             <h1 className="text-2xl font-semibold text-gray-950">Manager sign in</h1>
             <p className="mt-1 text-sm text-gray-500">
-              Access bookings, functions, tables, AI logs, users, and settings.
+              Access bookings, functions, tables, users, and settings.
             </p>
           </div>
 

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { ChevronLeft, ChevronRight, LogIn } from "lucide-react";
 import { Link } from "react-router";
 import { apiFetch, toJsonBody } from "../lib/api";
@@ -308,8 +308,11 @@ export default function PublicBooking() {
   );
   const tableBookingsEnabled = (meta?.settings.online_table_bookings_enabled ?? "1") !== "0";
   const functionRequestsEnabled = (meta?.settings.online_function_requests_enabled ?? "1") !== "0";
-  const serviceEnabled = (serviceValue: BookingForm["service"]) =>
-    serviceValue === "function" ? functionRequestsEnabled : tableBookingsEnabled;
+  const serviceEnabled = useCallback(
+    (serviceValue: BookingForm["service"]) =>
+      serviceValue === "function" ? functionRequestsEnabled : tableBookingsEnabled,
+    [functionRequestsEnabled, tableBookingsEnabled],
+  );
   const selectedAreaName =
     meta?.areas.find((area) => String(area.id) === form.preferred_area_id)?.name || "No preference";
   const policyMessage = useMemo(() => {
@@ -344,7 +347,7 @@ export default function PublicBooking() {
     }
 
     return null;
-  }, [blockedOnlineDateSet, form.date, form.service, form.time, functionRequestsEnabled, guestCount, meta, tableBookingsEnabled]);
+  }, [blockedOnlineDateSet, form.date, form.service, form.time, guestCount, meta, serviceEnabled]);
 
   const detailsComplete = Boolean(form.name.trim() && form.email && form.phone && form.terms_agreed);
 
@@ -725,7 +728,10 @@ export default function PublicBooking() {
                   checked={form.terms_agreed}
                   onChange={(checked) => updateBoolean("terms_agreed", checked)}
                 >
-                  I agree to the booking <a href="#terms">Terms and Conditions</a>
+                  I agree to the booking{" "}
+                  <Link to="/terms" target="_blank" rel="noreferrer" onClick={(event) => event.stopPropagation()}>
+                    Terms and Conditions
+                  </Link>
                 </CheckboxField>
               </div>
             </Card>

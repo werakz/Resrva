@@ -21,7 +21,7 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({
   useEffect(() => {
     /*
      * Resrva intentionally ships as a light dashboard for assessment consistency.
-     * TailAdmin's dark classes remain available, but the UI does not expose a toggle.
+     * Dark utility classes remain available, but the UI does not expose a toggle.
      */
     setTheme("light");
     setIsInitialized(true);

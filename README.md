@@ -1,60 +1,60 @@
 # Resrva
 
-Resrva is a full-stack reservation management system for **Old Canberra Inn**. It supports public table bookings, public function requests, and a manager dashboard for bookings, functions, calendar views, table areas, AI-assisted table assignment logs, manager users, and booking rules.
+Resrva is a full-stack restaurant reservation management system built for the Old Canberra Inn assessment scenario. It includes public booking forms, a manager dashboard, table and area management, calendar capacity views, configurable online booking rules, and an AI-assisted customer reply composer.
 
 ## Stack
 
-- Frontend: React 19, TypeScript, Vite, TailAdmin React/Tailwind UI kit
+- Frontend: React 19, TypeScript, Vite, Tailwind CSS
 - Backend: PHP 8 with PDO
 - Database: MySQL
-- Runtime target: XAMPP local demo
+- Local runtime: XAMPP or PHP's built-in server
 
-## Demo Accounts
+## Demo Account
 
 | Role | Email | Password |
 | --- | --- | --- |
 | Manager | `manager@resrva.test` | `Password123!` |
 
-Customers do not log in. They submit table bookings and function requests through the public forms.
+Customers do not log in. They use the public table booking and function request forms.
 
 ## Main Features
 
-- Manager session authentication with hashed passwords
-- Public table booking form for groups of 8 to 29
-- Public function request form for larger/private events
-- Automatic table assignment using local AI-assisted rules
-- Manager review and override path with audit logging
-- CRUD-style booking and function management
-- Manager user creation and activation/deactivation
-- Search, filter, and pagination on bookings/functions
-- Responsive TailAdmin dashboard
-- Server-side validation, prepared statements, and access checks
-- Simulated email delivery through an `email_logs` table
+- Public table booking form with editable booking terms.
+- Public function request form for larger/private events.
+- Manager dashboard with today's bookings, guest counts, pending actions, guest volume chart, and upcoming functions.
+- Bookings and functions management with filtering, status updates, table assignment, and customer notification prompts.
+- AI reply composer that drafts customer-facing messages from booking details and manager instructions.
+- Calendar view showing lunch/dinner capacity based on reservable tables.
+- Table and area management, including reservable/not reservable table status.
+- Settings for venue details, venue image, online booking availability, blocked online dates, booking rules, opening hours, and terms and conditions.
+- Manager user management and profile/avatar editing.
+- Server-side validation, prepared statements, session checks, and audit activity logging.
 
 ## Booking Rules
 
-Old Canberra Inn public information says the kitchen hours are:
+The seeded defaults follow the Old Canberra Inn assessment context:
 
-- Sunday and public holidays: 12:00 PM to 9:00 PM
-- Monday to Thursday: 12:00 PM to 9:30 PM
-- Friday to Saturday: 12:00 PM to 10:00 PM
-- Closed Christmas Day
+- Public table bookings default to groups of 8 to 29 guests.
+- Smaller groups are expected to walk in.
+- Larger/private events should use the function request form.
+- Christmas Day is seeded as an annual closed date.
+- Managers can override public booking limits when creating internal bookings.
 
-The venue also notes that table bookings are for groups of eight or more, with smaller groups encouraged to walk in. Source: <https://www.oldcanberrainn.com.au/>
+These values can be edited from the manager Settings page.
 
-## Setup
+## Setup With XAMPP
 
 1. Start Apache and MySQL in XAMPP.
-2. Create the database by importing `database/schema.sql` into MySQL.
-   - phpMyAdmin: choose Import, select `database/schema.sql`, run it.
-   - CLI if available: `mysql -u root < database/schema.sql`
-3. Confirm API database settings in `api/config.php`.
+2. Import `database/schema.sql` into MySQL.
+   - phpMyAdmin: create/select the database and import the SQL file.
+   - CLI: `mysql -u root < database/schema.sql`
+3. Confirm the database connection in `api/config.php`.
    - Default database: `resrva`
    - Default username: `root`
    - Default password: empty
-4. Place or keep this project where Apache can serve it as `/Resrva`.
+4. Serve the project through Apache, for example as `/Resrva`.
    - Expected API URL: `http://localhost/Resrva/api/index.php`
-5. Install and run the React frontend:
+5. Install and run the frontend:
 
 ```powershell
 cd frontend
@@ -62,18 +62,19 @@ npm install
 npm run dev
 ```
 
-6. Open the Vite URL shown in the terminal, usually `http://localhost:5173`.
+6. Open the Vite URL, usually `http://localhost:5173`.
 
-If your API is served at a different URL, set:
+If the API is hosted somewhere else, set `VITE_API_URL` before starting Vite:
 
 ```powershell
+cd frontend
 $env:VITE_API_URL='http://localhost/Resrva/api/index.php'
 npm run dev
 ```
 
-### Alternative Without Moving to htdocs
+## Setup Without Apache
 
-From the project root, run the PHP API with PHP's built-in server:
+From the project root:
 
 ```powershell
 php -S 127.0.0.1:8000 -t api
@@ -87,32 +88,41 @@ $env:VITE_API_URL='http://127.0.0.1:8000/index.php'
 npm run dev -- --host 127.0.0.1 --port 5173
 ```
 
-## Build
+## Public URLs
+
+- Table bookings: `/`
+- Function requests: `/functions`
+- Booking terms: `/terms`
+- Manager sign in: `/signin`
+
+## Build And Checks
 
 ```powershell
+php -l api/index.php
 cd frontend
 npm run build
+npm run lint
 ```
 
-The production frontend is generated in `frontend/dist`.
+The production frontend output is generated in `frontend/dist`. It is ignored because it can be rebuilt from source.
 
 ## Repository Structure
 
 ```text
-api/                 PHP API and configuration
+api/                 PHP API, upload handling, authentication, booking logic
 database/            MySQL schema and seed data
-docs/                Assessment documentation pack
-frontend/            React + TailAdmin frontend
+docs/                Assessment documentation and evidence
+frontend/            React manager dashboard and public booking forms
 ```
 
 ## AI Use Statement
 
-Resrva uses a local AI-assisted rules engine for table assignment. It does not send customer data to public AI services. The system recommends an area/table set based on party size, customer area preference, booking duration, existing reservations, function blocks, and active tables. Managers can review and override assignments, and each recommendation or override is recorded in `ai_assignment_logs`.
+Resrva includes an AI-assisted reply composer for managers. It uses booking context, status, customer details, and a manager instruction to draft a customer-facing response. If an `OPENAI_API_KEY` is configured in `api/config.php`, the API can use OpenAI for the draft; otherwise it falls back to a local deterministic draft generator.
 
-AI-assisted output is treated as a recommendation, not an autonomous decision-maker. Confirmation emails are simulated through the database for audit evidence.
+AI output is not sent automatically. Managers must review the draft before using it, and the system logs the generated reply action for audit evidence.
 
-## Known Notes
+## Notes For Submission
 
-- Email sending is simulated through `email_logs` because SMTP credentials are not available for the XAMPP demo.
-- TailAdmin template dependencies currently report npm audit advisories. The app builds successfully; a production handover should review dependency updates carefully before deployment.
-- The project is configured for local demonstration and should receive environment-specific hardening before internet deployment.
+- Runtime logs, build output, uploads, and dependencies are ignored by Git.
+- Email sending is simulated through database logging because SMTP credentials are not required for the local demo.
+- The checked-in source has been trimmed to the Resrva application and shared UI primitives used by the app.

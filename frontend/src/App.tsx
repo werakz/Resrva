@@ -5,6 +5,7 @@ import { ScrollToTop } from "./components/common/ScrollToTop";
 import ResrvaDashboard from "./pages/Dashboard/ResrvaDashboard";
 import PublicBooking from "./pages/PublicBooking";
 import PublicFunctionRequest from "./pages/PublicFunctionRequest";
+import PublicTerms from "./pages/PublicTerms";
 import Login from "./pages/Login";
 import BookingsPage from "./pages/BookingsPage";
 import FunctionsPage from "./pages/FunctionsPage";
@@ -23,6 +24,7 @@ export default function App() {
         <Routes>
           <Route path="/" element={<PublicBooking />} />
           <Route path="/functions" element={<PublicFunctionRequest />} />
+          <Route path="/terms" element={<PublicTerms />} />
           <Route path="/signin" element={<Login />} />
 
           <Route element={<ProtectedRoute />}>

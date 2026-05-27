@@ -1,0 +1,8 @@
+<svg width="256" height="256" viewBox="0 0 256 256" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Resrva logo">
+  <path d="M63 188C32.5 157.5 32.5 98.5 63 68C98.9 32.1 157.1 32.1 193 68C223.5 98.5 223.5 157.5 193 188" stroke="#0E5630" stroke-width="14" stroke-linecap="round"/>
+  <path d="M94 92V182" stroke="#0E5630" stroke-width="14" stroke-linecap="round"/>
+  <path d="M78 92V123C78 136.3 88.7 147 102 147C115.3 147 126 136.3 126 123V92" stroke="#0E5630" stroke-width="14" stroke-linecap="round"/>
+  <path d="M102 92V126" stroke="#0E5630" stroke-width="14" stroke-linecap="round"/>
+  <path d="M136 92H163C181.2 92 196 106.8 196 125C196 143.2 181.2 158 163 158H142" stroke="#0E5630" stroke-width="14" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M158 158L195 195" stroke="#0E5630" stroke-width="14" stroke-linecap="round"/>
+</svg>
