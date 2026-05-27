@@ -19,6 +19,13 @@ import type { Area, Booking, MetaPayload, Paginated } from "../types";
 import { FieldLabel, FormMessage, SelectInput, inputClass, textareaClass } from "../components/resrva/FormField";
 import { LoadingState } from "../components/resrva/LoadingState";
 import { StatusBadge } from "../components/resrva/StatusBadge";
+import {
+  AiReplyComposer,
+  replyPurposeForStatus,
+  statusNeedsCustomerNotice,
+  type ReplyPurpose,
+} from "../components/resrva/AiReplyComposer";
+import { CustomerNotifyPrompt } from "../components/resrva/CustomerNotifyPrompt";
 
 const functionStatuses = ["pending", "approved", "confirmed", "declined", "cancelled"] as const;
 const dateScopeTabs = [
@@ -54,6 +61,11 @@ type FunctionCreateForm = {
   assigned_area_ids: string[];
   notes: string;
   staff_notes: string;
+};
+type NotifyPromptState = {
+  booking: Booking;
+  purpose: ReplyPurpose;
+  message: string;
 };
 
 const emptyCreateFunction: FunctionCreateForm = {
@@ -149,6 +161,25 @@ function parseIds(value?: string | null): string[] {
 
 function assignedAreaLabel(booking: Booking): string {
   return booking.assigned_area_names || booking.assigned_area_name || "Unassigned";
+}
+
+function customerNoticeForStatusChange(previousStatus: string, nextStatus: string, booking: Booking): NotifyPromptState | null {
+  if (previousStatus === nextStatus || !statusNeedsCustomerNotice(nextStatus)) {
+    return null;
+  }
+
+  const message =
+    nextStatus === "confirmed" || nextStatus === "approved"
+      ? "This function is now confirmed. Do you want to draft a confirmation reply for the customer?"
+      : nextStatus === "declined"
+        ? "This function has been declined. Do you want to draft a polite reply for the customer?"
+        : "This function has been cancelled. Do you want to draft an update for the customer?";
+
+  return {
+    booking,
+    purpose: replyPurposeForStatus(nextStatus),
+    message,
+  };
 }
 
 function editForBooking(booking: Booking): FunctionEditState {
@@ -304,6 +335,9 @@ export default function FunctionsPage() {
   const [createForm, setCreateForm] = useState<FunctionCreateForm>(emptyCreateFunction);
   const [modalMessage, setModalMessage] = useState<{ type: "error" | "success"; text: string } | null>(null);
   const [message, setMessage] = useState<{ type: "error" | "success"; text: string } | null>(null);
+  const [notifyPrompt, setNotifyPrompt] = useState<NotifyPromptState | null>(null);
+  const [replyTarget, setReplyTarget] = useState<Booking | null>(null);
+  const [replyOpenRequest, setReplyOpenRequest] = useState<{ token: number; purpose: ReplyPurpose } | undefined>();
 
   const query = useMemo(() => {
     const params = new URLSearchParams({ page: String(page), per_page: "20" });
@@ -370,6 +404,12 @@ export default function FunctionsPage() {
   const closeCreateModal = () => {
     setModalMessage(null);
     setIsCreateOpen(false);
+  };
+
+  const openReplyFromPrompt = (booking: Booking, purpose: ReplyPurpose) => {
+    setReplyTarget(booking);
+    setNotifyPrompt(null);
+    setReplyOpenRequest({ token: Date.now(), purpose });
   };
 
   const updateDateScope = (scope: DateScope) => {
@@ -447,7 +487,7 @@ export default function FunctionsPage() {
     }
 
     try {
-      await apiFetch<{ item: Booking }>(`functions/${booking.id}`, {
+      const response = await apiFetch<{ item: Booking }>(`functions/${booking.id}`, {
         method: "PUT",
         ...toJsonBody({
           date: edit.date,
@@ -464,12 +504,16 @@ export default function FunctionsPage() {
       });
 
       setMessage({ type: "success", text: `${booking.booking_reference} updated.` });
+      const prompt = customerNoticeForStatusChange(booking.status, edit.status, response.item);
       setEdits((current) => {
         const next = { ...current };
         delete next[booking.id];
         return next;
       });
       await loadFunctions();
+      if (prompt) {
+        setNotifyPrompt(prompt);
+      }
     } catch (err) {
       setMessage({ type: "error", text: err instanceof Error ? err.message : "Function could not be updated." });
     }
@@ -487,6 +531,25 @@ export default function FunctionsPage() {
 
   return (
     <>
+      {notifyPrompt ? (
+        <CustomerNotifyPrompt
+          booking={notifyPrompt.booking}
+          purpose={notifyPrompt.purpose}
+          message={notifyPrompt.message}
+          onDismiss={() => setNotifyPrompt(null)}
+          onDraft={openReplyFromPrompt}
+        />
+      ) : null}
+
+      {replyTarget ? (
+        <AiReplyComposer
+          booking={replyTarget}
+          onLogged={loadFunctions}
+          openRequest={replyOpenRequest}
+          buttonClassName="hidden"
+        />
+      ) : null}
+
       {isCreateOpen ? (
         <div
           className="fixed inset-0 z-999999 flex items-center justify-center overflow-y-auto bg-black/40 px-4 py-4"
@@ -818,14 +881,17 @@ export default function FunctionsPage() {
                     {selectedBooking.booking_reference}
                   </p>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => saveFunction(selectedBooking)}
-                  className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-brand-500 px-4 text-sm font-medium text-white shadow-theme-xs hover:bg-brand-600"
-                >
-                  <Save className="size-4" />
-                  Save changes
-                </button>
+                <div className="flex flex-wrap items-center gap-2">
+                  <AiReplyComposer booking={selectedBooking} onLogged={loadFunctions} />
+                  <button
+                    type="button"
+                    onClick={() => saveFunction(selectedBooking)}
+                    className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-brand-500 px-4 text-sm font-medium text-white shadow-theme-xs hover:bg-brand-600"
+                  >
+                    <Save className="size-4" />
+                    Save changes
+                  </button>
+                </div>
               </div>
 
               <div className="max-h-[calc(100vh-16rem)] overflow-y-auto">

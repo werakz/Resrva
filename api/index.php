@@ -183,11 +183,29 @@ function current_user(): ?array
         return null;
     }
 
-    $stmt = db()->prepare('SELECT id, name, email, role, status, created_at, updated_at FROM users WHERE id = :id AND status = "active"');
+    $stmt = db()->prepare('SELECT id, name, email, role, status, avatar_url, created_at, updated_at FROM users WHERE id = :id AND status = "active"');
     $stmt->execute(['id' => $_SESSION['user_id']]);
     $user = $stmt->fetch();
 
-    return $user ?: null;
+    return normalize_user_record($user ?: null);
+}
+
+function normalize_user_record(?array $user): ?array
+{
+    if (!$user) {
+        return null;
+    }
+
+    if (array_key_exists('avatar_url', $user) && $user['avatar_url'] !== null) {
+        $user['avatar_url'] = public_asset_url((string) $user['avatar_url']);
+    }
+
+    return $user;
+}
+
+function normalize_user_records(array $users): array
+{
+    return array_map(static fn (array $user) => normalize_user_record($user), $users);
 }
 
 function require_manager(): array
@@ -421,6 +439,29 @@ function ensure_online_booking_blocks_table(): void
     $checked = true;
 }
 
+function ensure_user_avatar_column(): void
+{
+    static $checked = false;
+    if ($checked) {
+        return;
+    }
+
+    $stmt = db()->prepare(
+        "SELECT COUNT(*)
+         FROM INFORMATION_SCHEMA.COLUMNS
+         WHERE TABLE_SCHEMA = DATABASE()
+           AND TABLE_NAME = 'users'
+           AND COLUMN_NAME = 'avatar_url'"
+    );
+    $stmt->execute();
+
+    if ((int) $stmt->fetchColumn() === 0) {
+        db()->exec('ALTER TABLE users ADD COLUMN avatar_url VARCHAR(255) NULL AFTER status');
+    }
+
+    $checked = true;
+}
+
 function validate_date_value(string $date): void
 {
     $dateObj = DateTime::createFromFormat('Y-m-d', $date);
@@ -495,7 +536,7 @@ function log_activity(?int $userId, string $action, string $entityType, ?int $en
     ]);
 }
 
-function create_email_log(int $bookingId, string $email, string $subject, string $body): void
+function create_email_log(int $bookingId, string $email, string $subject, string $body): int
 {
     /*
      * Real SMTP is intentionally replaceable. The assessment demo keeps email
@@ -511,6 +552,8 @@ function create_email_log(int $bookingId, string $email, string $subject, string
         'subject' => $subject,
         'body' => $body,
     ]);
+
+    return (int) db()->lastInsertId();
 }
 
 function email_display_date(string $date): string
@@ -554,6 +597,267 @@ function create_function_confirmation_email(array $booking, string $managerMessa
         "Old Canberra Inn function booking {$reference} {$statusLabel}",
         $body
     );
+}
+
+function booking_reply_area_label(array $booking): string
+{
+    if ((string) ($booking['booking_type'] ?? '') === 'table') {
+        if (!empty($booking['table_numbers'])) {
+            return 'table ' . $booking['table_numbers'];
+        }
+
+        return (string) ($booking['assigned_area_name'] ?? $booking['preferred_area_name'] ?? 'your table');
+    }
+
+    return (string) ($booking['assigned_area_names'] ?? $booking['assigned_area_name'] ?? $booking['preferred_area_name'] ?? 'the function area');
+}
+
+function booking_reply_prompt_context(array $booking, string $purpose, string $instructions): string
+{
+    $eventType = (string) ($booking['event_type'] ?? '');
+    $bookingType = (string) ($booking['booking_type'] ?? 'table');
+    $lines = [
+        'Write a warm, concise customer email for Old Canberra Inn.',
+        'Return only JSON with keys subject and body.',
+        'Tone: professional, helpful, friendly, no emojis.',
+        'Transform manager instructions into natural customer-facing wording. Do not copy short notes verbatim.',
+        'Purpose: ' . $purpose,
+        'Booking type: ' . $bookingType,
+        'Reference: ' . (string) ($booking['booking_reference'] ?? ''),
+        'Customer: ' . (string) ($booking['customer_name'] ?? ''),
+        'Status: ' . (string) ($booking['status'] ?? ''),
+        'Date: ' . email_display_date((string) ($booking['booking_date'] ?? '')),
+        'Time: ' . email_display_time((string) ($booking['start_time'] ?? '')) . ' - ' . email_display_time((string) ($booking['end_time'] ?? '')),
+        'Guests: ' . (int) ($booking['guest_count'] ?? 0),
+        'Area/table: ' . booking_reply_area_label($booking),
+    ];
+
+    if ($eventType !== '') {
+        $lines[] = 'Event type: ' . $eventType;
+    }
+    if (!empty($booking['notes'])) {
+        $lines[] = 'Guest notes: ' . (string) $booking['notes'];
+    }
+    if (!empty($booking['staff_notes'])) {
+        $lines[] = 'Internal staff notes, use only if customer-safe: ' . (string) $booking['staff_notes'];
+    }
+    if ($instructions !== '') {
+        $lines[] = 'Manager instructions: ' . $instructions;
+    }
+
+    return implode("\n", $lines);
+}
+
+function openai_booking_reply_draft(array $booking, string $purpose, string $instructions): ?array
+{
+    global $config;
+
+    $apiKey = (string) ($config['ai']['openai_api_key'] ?? '');
+    if ($apiKey === '' || !function_exists('curl_init')) {
+        return null;
+    }
+
+    $model = (string) ($config['ai']['openai_model'] ?? 'gpt-4o-mini');
+    $payload = [
+        'model' => $model,
+        'messages' => [
+            [
+                'role' => 'system',
+                'content' => 'You draft concise hospitality booking emails. Return strict JSON only.',
+            ],
+            [
+                'role' => 'user',
+                'content' => booking_reply_prompt_context($booking, $purpose, $instructions),
+            ],
+        ],
+        'temperature' => 0.4,
+    ];
+
+    $ch = curl_init('https://api.openai.com/v1/chat/completions');
+    curl_setopt_array($ch, [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_POST => true,
+        CURLOPT_HTTPHEADER => [
+            'Content-Type: application/json',
+            'Authorization: Bearer ' . $apiKey,
+        ],
+        CURLOPT_POSTFIELDS => json_encode($payload, JSON_UNESCAPED_SLASHES),
+        CURLOPT_TIMEOUT => 12,
+    ]);
+
+    $response = curl_exec($ch);
+    $statusCode = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    curl_close($ch);
+
+    if (!is_string($response) || $statusCode < 200 || $statusCode >= 300) {
+        return null;
+    }
+
+    $decoded = json_decode($response, true);
+    $content = $decoded['choices'][0]['message']['content'] ?? '';
+    $draft = is_string($content) ? json_decode($content, true) : null;
+
+    if (!is_array($draft) || empty($draft['subject']) || empty($draft['body'])) {
+        return null;
+    }
+
+    return [
+        'subject' => clean_string($draft['subject']),
+        'body' => clean_string($draft['body']),
+        'provider' => 'openai',
+        'model' => $model,
+    ];
+}
+
+function local_reply_instruction_sentences(string $instructions): array
+{
+    $instructions = clean_string($instructions);
+    if ($instructions === '') {
+        return [];
+    }
+
+    $text = strtolower($instructions);
+    $sentences = [];
+
+    if (preg_match('/diet|allerg|vegan|vegetarian|gluten|coeliac|celiac/', $text)) {
+        $sentences[] = 'Please let us know if anyone in your group has dietary requirements or allergies.';
+    }
+    if (preg_match('/deposit|payment|prepay|pre-pay/', $text)) {
+        $sentences[] = 'Please note that a deposit or pre-payment may be required to secure the booking.';
+    }
+    if (preg_match('/cake|birthday cake/', $text)) {
+        $sentences[] = 'If you are bringing a cake, please let us know so the team can prepare accordingly.';
+    }
+    if (preg_match('/pre.?order|set menu|menu/', $text)) {
+        $sentences[] = 'If you would like to discuss menu options or pre-orders, please reply and our team can help.';
+    }
+    if (preg_match('/arrival|arrive|early/', $text)) {
+        $sentences[] = 'Please arrive a little before your booking time so we can get everyone settled comfortably.';
+    }
+    if (preg_match('/access|wheelchair|mobility|pram/', $text)) {
+        $sentences[] = 'Please let us know if anyone in your group has accessibility needs so we can plan the best setup.';
+    }
+    if (preg_match('/children|kids|high chair|highchair/', $text)) {
+        $sentences[] = 'Please let us know if you need high chairs or space for children in the booking setup.';
+    }
+    if (preg_match('/parking/', $text)) {
+        $sentences[] = 'Please allow a little extra time for parking, especially during busy service periods.';
+    }
+
+    if ($sentences !== []) {
+        return array_values(array_unique($sentences));
+    }
+
+    $cleaned = preg_replace('/^(please\s+)?(mention|include|add|ask|tell|say|note)\s+(that\s+|about\s+)?/i', '', $instructions);
+    $cleaned = clean_string($cleaned);
+    if ($cleaned === '') {
+        return [];
+    }
+
+    $sentence = strtoupper(substr($cleaned, 0, 1)) . substr($cleaned, 1);
+    if (!preg_match('/[.!?]$/', $sentence)) {
+        $sentence .= '.';
+    }
+
+    return [$sentence];
+}
+
+function local_booking_reply_draft(array $booking, string $purpose, string $instructions): array
+{
+    $name = (string) ($booking['customer_name'] ?? 'there');
+    $reference = (string) ($booking['booking_reference'] ?? '');
+    $bookingType = (string) ($booking['booking_type'] ?? 'table');
+    $status = (string) ($booking['status'] ?? 'confirmed');
+    $date = email_display_date((string) ($booking['booking_date'] ?? ''));
+    $startTime = email_display_time((string) ($booking['start_time'] ?? ''));
+    $endTime = email_display_time((string) ($booking['end_time'] ?? ''));
+    $guests = (int) ($booking['guest_count'] ?? 0);
+    $area = booking_reply_area_label($booking);
+    $eventType = clean_string($booking['event_type'] ?? '');
+    $kind = $bookingType === 'function' ? ($eventType !== '' ? strtolower($eventType) . ' function' : 'function') : 'table booking';
+
+    $subject = match ($purpose) {
+        'decline' => "Old Canberra Inn booking {$reference} update",
+        'request_info' => "A quick question about your Old Canberra Inn booking {$reference}",
+        'update' => "Old Canberra Inn booking {$reference} update",
+        default => "Old Canberra Inn booking {$reference} confirmation",
+    };
+
+    $opening = match ($purpose) {
+        'decline' => "Thanks for your {$kind} enquiry. Unfortunately, we are unable to accommodate this booking as requested.",
+        'request_info' => "Thanks for your {$kind} enquiry. We just need a little more information before we can finalise it.",
+        'update' => "I am writing with an update for your {$kind} at Old Canberra Inn.",
+        default => "Your {$kind} at Old Canberra Inn is {$status}.",
+    };
+
+    $body = "Hi {$name},\n\n";
+    $body .= "{$opening}\n\n";
+
+    $instructionSentences = local_reply_instruction_sentences($instructions);
+    if ($instructionSentences !== []) {
+        $body .= implode("\n", $instructionSentences) . "\n\n";
+    }
+
+    $body .= "Booking details:\n";
+    $body .= "Reference: {$reference}\n";
+    $body .= "Date: {$date}\n";
+    $body .= "Time: {$startTime} - {$endTime}\n";
+    $body .= "Guests: {$guests}\n";
+    $body .= ($bookingType === 'table' ? 'Table/area: ' : 'Area(s): ') . "{$area}\n";
+    $body .= "\nKind regards,\nOld Canberra Inn";
+
+    return [
+        'subject' => $subject,
+        'body' => $body,
+        'provider' => 'local_ai',
+        'model' => 'resrva-reply-drafter',
+    ];
+}
+
+function generate_booking_reply_draft(int $bookingId, array $data, array $manager): array
+{
+    $booking = fetch_booking($bookingId);
+    if (!$booking) {
+        fail('Booking not found.', 404);
+    }
+
+    $purpose = clean_string($data['purpose'] ?? 'confirm');
+    if (!in_array($purpose, ['confirm', 'update', 'decline', 'request_info'], true)) {
+        fail('Please choose a valid reply type.', 422, ['purpose' => $purpose]);
+    }
+
+    $instructions = clean_string($data['instructions'] ?? '');
+    $draft = openai_booking_reply_draft($booking, $purpose, $instructions)
+        ?? local_booking_reply_draft($booking, $purpose, $instructions);
+
+    log_activity((int) $manager['id'], 'drafted_ai_reply', 'booking', $bookingId, [
+        'purpose' => $purpose,
+        'provider' => $draft['provider'],
+    ]);
+
+    return [
+        'subject' => $draft['subject'],
+        'body' => $draft['body'],
+        'provider' => $draft['provider'],
+        'model' => $draft['model'],
+    ];
+}
+
+function log_ai_reply_email(int $bookingId, array $data, array $manager): array
+{
+    $booking = fetch_booking($bookingId);
+    if (!$booking) {
+        fail('Booking not found.', 404);
+    }
+
+    $subject = clean_string($data['subject'] ?? '');
+    $body = clean_string($data['body'] ?? '');
+    require_fields(['subject' => $subject, 'body' => $body], ['subject', 'body']);
+
+    $emailLogId = create_email_log($bookingId, (string) $booking['customer_email'], $subject, $body);
+    log_activity((int) $manager['id'], 'logged_ai_reply', 'booking', $bookingId, ['email_log_id' => $emailLogId]);
+
+    return ['ok' => true, 'email_log_id' => $emailLogId];
 }
 
 function overlapping_table_ids(string $date, string $startTime, string $endTime, ?int $excludeBookingId = null): array
@@ -738,10 +1042,10 @@ function manual_table_assignment(array $tableIds, int $guestCount, string $date,
 
     $placeholders = implode(',', array_fill(0, count($tableIds), '?'));
     $stmt = db()->prepare(
-        "SELECT vt.id, vt.table_number, vt.capacity, vt.area_id, a.name AS area_name
+        "SELECT vt.id, vt.table_number, vt.capacity, vt.area_id, vt.active, a.name AS area_name
          FROM venue_tables vt
          JOIN areas a ON a.id = vt.area_id
-         WHERE vt.active = 1
+         WHERE a.active = 1
            AND vt.id IN ({$placeholders})
          ORDER BY vt.table_number"
     );
@@ -789,7 +1093,7 @@ function manual_table_assignment(array $tableIds, int $guestCount, string $date,
         'rules_snapshot' => [
             'guest_count' => $guestCount,
             'duration_minutes' => (int) setting('default_duration_minutes', '120'),
-            'strategy' => 'Manager manual table assignment.',
+            'strategy' => 'Manager manual table assignment. Non-reservable tables may be selected manually.',
         ],
     ];
 }
@@ -1205,12 +1509,16 @@ function list_bookings(?string $type): void
 
     if (!empty($_GET['search'])) {
         $where .= ' AND (
-            b.booking_reference LIKE :search
-            OR COALESCE(NULLIF(b.customer_name_snapshot, ""), c.name) LIKE :search
-            OR COALESCE(NULLIF(b.customer_email_snapshot, ""), c.email) LIKE :search
-            OR COALESCE(NULLIF(b.customer_phone_snapshot, ""), c.phone) LIKE :search
+            b.booking_reference LIKE :search_reference
+            OR COALESCE(NULLIF(b.customer_name_snapshot, ""), c.name) LIKE :search_name
+            OR COALESCE(NULLIF(b.customer_email_snapshot, ""), c.email) LIKE :search_email
+            OR COALESCE(NULLIF(b.customer_phone_snapshot, ""), c.phone) LIKE :search_phone
         )';
-        $params['search'] = '%' . clean_string($_GET['search']) . '%';
+        $searchTerm = '%' . clean_string($_GET['search']) . '%';
+        $params['search_reference'] = $searchTerm;
+        $params['search_name'] = $searchTerm;
+        $params['search_email'] = $searchTerm;
+        $params['search_phone'] = $searchTerm;
     }
 
     $count = db()->prepare(
@@ -1340,10 +1648,6 @@ function update_booking(int $bookingId, array $data, array $manager): array
     }
 
     $nextStatus = $status !== '' ? $status : (string) $existing['status'];
-    $shouldSendFunctionConfirmation = (string) $existing['booking_type'] === 'function'
-        && $status !== ''
-        && in_array($nextStatus, ['approved', 'confirmed'], true)
-        && $nextStatus !== (string) $existing['status'];
     if (
         (string) $existing['booking_type'] === 'function'
         && in_array($nextStatus, ['approved', 'confirmed'], true)
@@ -1421,9 +1725,7 @@ function update_booking(int $bookingId, array $data, array $manager): array
     }
 
     $booking = fetch_booking($bookingId);
-    if ($booking && $shouldSendFunctionConfirmation) {
-        create_function_confirmation_email($booking, $managerMessage);
-    } elseif ($booking && $managerMessage !== '') {
+    if ($booking && $managerMessage !== '') {
         create_email_log(
             $bookingId,
             $booking['customer_email'],
@@ -1745,6 +2047,58 @@ function upload_venue_image(array $manager): array
     return ['url' => $url];
 }
 
+function upload_profile_avatar(array $manager): array
+{
+    if (empty($_FILES['image']) || !is_array($_FILES['image'])) {
+        fail('Please choose an image to upload.', 422);
+    }
+
+    $file = $_FILES['image'];
+    if (($file['error'] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_OK) {
+        fail('Image upload failed.', 422, ['upload_error' => $file['error'] ?? null]);
+    }
+
+    if (($file['size'] ?? 0) > 5 * 1024 * 1024) {
+        fail('Image must be 5 MB or smaller.', 422);
+    }
+
+    $tmpPath = (string) ($file['tmp_name'] ?? '');
+    $finfo = new finfo(FILEINFO_MIME_TYPE);
+    $mimeType = $finfo->file($tmpPath) ?: '';
+    $extensions = [
+        'image/jpeg' => 'jpg',
+        'image/png' => 'png',
+        'image/webp' => 'webp',
+        'image/gif' => 'gif',
+    ];
+
+    if (!isset($extensions[$mimeType])) {
+        fail('Please upload a JPG, PNG, WebP, or GIF image.', 422, ['mime_type' => $mimeType]);
+    }
+
+    $uploadDir = __DIR__ . '/uploads/users';
+    if (!is_dir($uploadDir) && !mkdir($uploadDir, 0775, true) && !is_dir($uploadDir)) {
+        fail('Profile image folder could not be created.', 500);
+    }
+
+    $filename = 'user-' . (int) $manager['id'] . '-' . date('Ymd-His') . '-' . bin2hex(random_bytes(4)) . '.' . $extensions[$mimeType];
+    $destination = $uploadDir . '/' . $filename;
+
+    if (!move_uploaded_file($tmpPath, $destination)) {
+        fail('Profile image could not be saved.', 500);
+    }
+
+    $url = public_asset_url('uploads/users/' . $filename);
+    $stmt = db()->prepare('UPDATE users SET avatar_url = :avatar_url, updated_at = NOW() WHERE id = :id');
+    $stmt->execute([
+        'avatar_url' => $url,
+        'id' => (int) $manager['id'],
+    ]);
+    log_activity((int) $manager['id'], 'updated', 'profile', (int) $manager['id'], ['avatar_url' => $url]);
+
+    return ['url' => $url, 'user' => current_user()];
+}
+
 function area_code_from_name(string $name): string
 {
     $code = strtoupper((string) preg_replace('/[^A-Za-z0-9]+/', '_', $name));
@@ -1812,6 +2166,7 @@ function sync_area_table_range(int $areaId): void
 try {
     ensure_booking_customer_snapshots();
     ensure_online_booking_blocks_table();
+    ensure_user_avatar_column();
 
     $method = $_SERVER['REQUEST_METHOD'];
     $route = trim((string) ($_GET['r'] ?? 'meta'), '/');
@@ -1825,7 +2180,7 @@ try {
         $data = json_body();
         require_fields($data, ['email', 'password']);
 
-        $stmt = db()->prepare('SELECT id, name, email, role, password_hash, status FROM users WHERE email = :email LIMIT 1');
+        $stmt = db()->prepare('SELECT id, name, email, role, password_hash, status, avatar_url FROM users WHERE email = :email LIMIT 1');
         $stmt->execute(['email' => strtolower(clean_string($data['email']))]);
         $user = $stmt->fetch();
 
@@ -1836,7 +2191,7 @@ try {
         $_SESSION['user_id'] = (int) $user['id'];
         log_activity((int) $user['id'], 'signed_in', 'user', (int) $user['id']);
         unset($user['password_hash']);
-        respond(['user' => $user]);
+        respond(['user' => normalize_user_record($user)]);
     }
 
     if ($method === 'POST' && $route === 'auth/logout') {
@@ -1850,6 +2205,55 @@ try {
 
     if ($method === 'GET' && $route === 'auth/me') {
         respond(['user' => current_user()]);
+    }
+
+    if ($method === 'PUT' && $route === 'profile') {
+        $manager = require_manager();
+        $data = json_body();
+        $name = clean_string($data['name'] ?? '');
+        $email = strtolower(clean_string($data['email'] ?? ''));
+        $password = (string) ($data['password'] ?? '');
+
+        require_fields(['name' => $name, 'email' => $email], ['name', 'email']);
+        validate_email_address($email);
+
+        if (scalar_query('SELECT COUNT(*) FROM users WHERE email = ? AND id <> ?', [$email, (int) $manager['id']]) > 0) {
+            fail('That email is already used by another user.', 409, ['email' => $email]);
+        }
+
+        $updates = ['name = :name', 'email = :email', 'updated_at = NOW()'];
+        $params = [
+            'name' => $name,
+            'email' => $email,
+            'id' => (int) $manager['id'],
+        ];
+
+        if ($password !== '') {
+            if (strlen($password) < 8) {
+                fail('Password must be at least 8 characters.', 422);
+            }
+
+            $updates[] = 'password_hash = :password_hash';
+            $params['password_hash'] = password_hash($password, PASSWORD_DEFAULT);
+        }
+
+        $stmt = db()->prepare('UPDATE users SET ' . implode(', ', $updates) . ' WHERE id = :id');
+        $stmt->execute($params);
+        log_activity((int) $manager['id'], 'updated', 'profile', (int) $manager['id']);
+        respond(['user' => current_user()]);
+    }
+
+    if ($method === 'POST' && $route === 'profile/avatar') {
+        $manager = require_manager();
+        respond(upload_profile_avatar($manager), 201);
+    }
+
+    if ($method === 'DELETE' && $route === 'profile/avatar') {
+        $manager = require_manager();
+        $stmt = db()->prepare('UPDATE users SET avatar_url = NULL, updated_at = NOW() WHERE id = :id');
+        $stmt->execute(['id' => (int) $manager['id']]);
+        log_activity((int) $manager['id'], 'updated', 'profile', (int) $manager['id'], ['avatar_url' => '']);
+        respond(['ok' => true, 'user' => current_user()]);
     }
 
     if ($method === 'POST' && $route === 'public/table-bookings') {
@@ -1891,6 +2295,16 @@ try {
         $result = create_table_booking(json_body(), $manager);
         db()->commit();
         respond($result, 201);
+    }
+
+    if (($segments[0] ?? '') === 'bookings' && isset($segments[1], $segments[2]) && $segments[2] === 'reply-draft' && $method === 'POST') {
+        $manager = require_manager();
+        respond(generate_booking_reply_draft((int) $segments[1], json_body(), $manager));
+    }
+
+    if (($segments[0] ?? '') === 'bookings' && isset($segments[1], $segments[2]) && $segments[2] === 'reply-log' && $method === 'POST') {
+        $manager = require_manager();
+        respond(log_ai_reply_email((int) $segments[1], json_body(), $manager), 201);
     }
 
     if (($segments[0] ?? '') === 'bookings' && isset($segments[1]) && $method === 'PUT') {
@@ -2041,7 +2455,7 @@ try {
         }
 
         if (scalar_query('SELECT COUNT(*) FROM booking_tables WHERE table_id = ?', [$tableId]) > 0) {
-            fail('This table is used by existing bookings. Mark it inactive instead.', 409);
+            fail('This table is used by existing bookings. Mark it not reservable instead.', 409);
         }
 
         db()->prepare('DELETE FROM venue_tables WHERE id = :id')->execute(['id' => $tableId]);
@@ -2174,8 +2588,8 @@ try {
 
     if ($method === 'GET' && $route === 'users') {
         require_manager();
-        $items = db()->query('SELECT id, name, email, role, status, created_at, updated_at FROM users ORDER BY created_at DESC')->fetchAll();
-        respond(['items' => $items]);
+        $items = db()->query('SELECT id, name, email, role, status, avatar_url, created_at, updated_at FROM users ORDER BY created_at DESC')->fetchAll();
+        respond(['items' => normalize_user_records($items)]);
     }
 
     if ($method === 'POST' && $route === 'users') {

@@ -20,6 +20,13 @@ type DayStats = {
   bookings: Booking[];
   guests: number;
   load: number;
+  lunchReservedCapacity: number;
+  dinnerReservedCapacity: number;
+};
+
+type DayStatsDraft = DayStats & {
+  lunchTableIds: Set<number>;
+  dinnerTableIds: Set<number>;
 };
 
 type MealFilter = "all" | "lunch" | "dinner";
@@ -85,6 +92,23 @@ function minutesFromTime(time: string): number {
   const [hours = "0", minutes = "0"] = time.slice(0, 5).split(":");
 
   return Number(hours) * 60 + Number(minutes);
+}
+
+function bookingMeal(booking: Booking): "lunch" | "dinner" {
+  return minutesFromTime(booking.start_time) < 17 * 60 ? "lunch" : "dinner";
+}
+
+function bookingMatchesMeal(booking: Booking, mealFilter: MealFilter): boolean {
+  return mealFilter === "all" || bookingMeal(booking) === mealFilter;
+}
+
+function parseIdList(value?: string | null): number[] {
+  return value
+    ? value
+        .split(",")
+        .map((id) => Number(id.trim()))
+        .filter((id) => Number.isFinite(id) && id > 0)
+    : [];
 }
 
 function pluralize(count: number, label: string): string {
@@ -183,44 +207,99 @@ export default function ResrvaCalendar() {
 
   const filteredItems = useMemo(() => {
     return (items || []).filter((booking) => {
-      const mealMatches =
-        mealFilter === "all" ||
-        (mealFilter === "lunch"
-          ? minutesFromTime(booking.start_time) < 17 * 60
-          : minutesFromTime(booking.start_time) >= 17 * 60);
-
-      return mealMatches;
+      return bookingMatchesMeal(booking, mealFilter);
     });
   }, [items, mealFilter]);
 
-  const dailyCapacity = useMemo(() => {
+  const dailyReservableCapacity = useMemo(() => {
     if (!tablesData) return 1;
 
-    const activeTables = tablesData.tables.filter((table) => {
-      const isActive = Boolean(Number(table.active));
-
-      return isActive;
-    });
+    const reservableTables = tablesData.tables.filter((table) => Boolean(Number(table.active)));
 
     return Math.max(
-      activeTables.reduce((total, table) => total + Number(table.capacity || 0), 0),
+      reservableTables.reduce((total, table) => total + Number(table.capacity || 0), 0),
       1,
     );
   }, [tablesData]);
 
   const statsByDate = useMemo(() => {
-    const map = new Map<string, DayStats>();
+    if (!tablesData) return new Map<string, DayStats>();
+
+    const map = new Map<string, DayStatsDraft>();
+    const reservableTableIds = new Set<number>();
+    const tableCapacityById = new Map<number, number>();
+    const reservableTableIdsByArea = new Map<number, number[]>();
+
+    for (const table of tablesData.tables) {
+      const tableId = Number(table.id);
+      if (!Boolean(Number(table.active))) {
+        continue;
+      }
+
+      reservableTableIds.add(tableId);
+      tableCapacityById.set(tableId, Number(table.capacity || 0));
+      const areaId = Number(table.area_id);
+      reservableTableIdsByArea.set(areaId, [...(reservableTableIdsByArea.get(areaId) || []), tableId]);
+    }
+
+    const reservedCapacity = (tableIds: Set<number>) => {
+      let capacity = 0;
+      for (const tableId of tableIds) {
+        capacity += tableCapacityById.get(tableId) || 0;
+      }
+      return capacity;
+    };
 
     for (const booking of filteredItems) {
-      const existing = map.get(booking.booking_date) || { bookings: [], guests: 0, load: 0 };
+      const existing = map.get(booking.booking_date) || {
+        bookings: [],
+        guests: 0,
+        load: 0,
+        lunchReservedCapacity: 0,
+        dinnerReservedCapacity: 0,
+        lunchTableIds: new Set<number>(),
+        dinnerTableIds: new Set<number>(),
+      };
+      const guestCount = Number(booking.guest_count || 0);
+      const meal = bookingMeal(booking);
+      const reservedTableIds = meal === "lunch" ? existing.lunchTableIds : existing.dinnerTableIds;
+
       existing.bookings.push(booking);
-      existing.guests += Number(booking.guest_count || 0);
-      existing.load = Math.round((existing.guests / dailyCapacity) * 100);
+      existing.guests += guestCount;
+
+      if (booking.booking_type === "function") {
+        const areaIds = parseIdList(booking.assigned_area_ids);
+        if (!areaIds.length && booking.assigned_area_id) {
+          areaIds.push(Number(booking.assigned_area_id));
+        }
+
+        for (const areaId of areaIds) {
+          for (const tableId of reservableTableIdsByArea.get(areaId) || []) {
+            reservedTableIds.add(tableId);
+          }
+        }
+      } else {
+        for (const tableId of parseIdList(booking.table_ids)) {
+          if (reservableTableIds.has(tableId)) {
+            reservedTableIds.add(tableId);
+          }
+        }
+      }
+
+      existing.lunchReservedCapacity = reservedCapacity(existing.lunchTableIds);
+      existing.dinnerReservedCapacity = reservedCapacity(existing.dinnerTableIds);
+      const loadCapacity =
+        mealFilter === "all"
+          ? Math.max(existing.lunchReservedCapacity, existing.dinnerReservedCapacity)
+          : mealFilter === "lunch"
+            ? existing.lunchReservedCapacity
+            : existing.dinnerReservedCapacity;
+      existing.load = Math.round((loadCapacity / dailyReservableCapacity) * 100);
       map.set(booking.booking_date, existing);
     }
 
     return map;
-  }, [dailyCapacity, filteredItems]);
+  }, [dailyReservableCapacity, filteredItems, mealFilter, tablesData]);
 
   const visibleDays = useMemo(() => calendarDays(currentMonth), [currentMonth]);
   const onlineBookingBlockSet = useMemo(() => new Set(onlineBookingBlocks), [onlineBookingBlocks]);
@@ -355,7 +434,13 @@ export default function ResrvaCalendar() {
                   const iso = toIsoDate(day);
                   const isCurrentMonth = day.getMonth() === currentMonth.getMonth();
                   const isSelected = iso === selectedDate;
-                  const stats = statsByDate.get(iso) || { bookings: [], guests: 0, load: 0 };
+                  const stats = statsByDate.get(iso) || {
+                    bookings: [],
+                    guests: 0,
+                    load: 0,
+                    lunchReservedCapacity: 0,
+                    dinnerReservedCapacity: 0,
+                  };
                   const style = loadStyle(stats.load);
                   const barWidth = `${Math.min(stats.load, 100)}%`;
                   const hasFunction = stats.bookings.some((booking) => booking.booking_type === "function");

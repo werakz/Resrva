@@ -71,9 +71,9 @@ export default function TablesAreasPage() {
     () => activeAreas.map((area) => ({ value: String(area.id), label: area.name })),
     [activeAreas],
   );
-  const activeOptions = [
-    { value: "1", label: "Active" },
-    { value: "0", label: "Inactive" },
+  const reservableOptions = [
+    { value: "1", label: "Reservable" },
+    { value: "0", label: "Not reservable" },
   ];
   const yesNoOptions = [
     { value: "0", label: "No" },
@@ -315,7 +315,7 @@ export default function TablesAreasPage() {
         <div className="tables-areas-list">
           {activeAreas.map((area) => {
             const tables = tablesByArea.get(area.id) || [];
-            const activeCount = tables.filter((table) => isActive(table.active)).length;
+            const reservableCount = tables.filter((table) => isActive(table.active)).length;
 
             return (
               <section
@@ -343,7 +343,7 @@ export default function TablesAreasPage() {
                     </p>
                   </div>
                   <span className="shrink-0 rounded-full bg-gray-100 px-2.5 py-1 text-xs font-medium text-gray-700">
-                    {activeCount}/{tables.length} active
+                    {reservableCount}/{tables.length} reservable
                   </span>
                 </div>
 
@@ -361,9 +361,11 @@ export default function TablesAreasPage() {
                           ? "border-brand-500 bg-brand-100 text-brand-800 ring-2 ring-brand-500/15"
                           : isActive(table.active)
                             ? "border-brand-200 bg-brand-50 text-brand-800"
-                            : "border-gray-200 bg-gray-100 text-gray-400"
+                            : "border-gray-200 bg-gray-100 text-gray-400 opacity-75"
                       }`}
-                      title={`Table ${table.table_number}, capacity ${table.capacity}`}
+                      title={`Table ${table.table_number}, capacity ${table.capacity}, ${
+                        isActive(table.active) ? "reservable" : "not reservable"
+                      }`}
                     >
                       {table.table_number}
                     </button>
@@ -436,12 +438,12 @@ export default function TablesAreasPage() {
                   </div>
                 </div>
                 <div>
-                  <FieldLabel htmlFor="active">Status</FieldLabel>
+                  <FieldLabel htmlFor="active">Booking availability</FieldLabel>
                   <SelectInput
                     id="active"
                     value={tableForm.active}
                     onChange={(value) => setTableForm((current) => ({ ...current, active: value }))}
-                    options={activeOptions}
+                    options={reservableOptions}
                   />
                 </div>
                 <div className="flex flex-wrap gap-2">
@@ -585,12 +587,12 @@ export default function TablesAreasPage() {
               </div>
             </div>
             <div>
-              <FieldLabel htmlFor="new-table-active">Status</FieldLabel>
+              <FieldLabel htmlFor="new-table-active">Booking availability</FieldLabel>
               <SelectInput
                 id="new-table-active"
                 value={newTableForm.active}
                 onChange={(value) => setNewTableForm((current) => ({ ...current, active: value }))}
-                options={activeOptions}
+                options={reservableOptions}
               />
             </div>
             <div className="flex flex-wrap justify-end gap-2 pt-2">

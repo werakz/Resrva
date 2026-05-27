@@ -10,9 +10,9 @@ import BookingsPage from "./pages/BookingsPage";
 import FunctionsPage from "./pages/FunctionsPage";
 import ResrvaCalendar from "./pages/ResrvaCalendar";
 import TablesAreasPage from "./pages/TablesAreasPage";
-import AiLogPage from "./pages/AiLogPage";
 import UsersPage from "./pages/UsersPage";
 import SettingsPage from "./pages/SettingsPage";
+import ProfilePage from "./pages/ProfilePage";
 import { ProtectedRoute } from "./components/resrva/ProtectedRoute";
 
 export default function App() {
@@ -32,9 +32,9 @@ export default function App() {
               <Route path="functions" element={<FunctionsPage />} />
               <Route path="calendar" element={<ResrvaCalendar />} />
               <Route path="tables" element={<TablesAreasPage />} />
-              <Route path="ai-log" element={<AiLogPage />} />
               <Route path="users" element={<UsersPage />} />
               <Route path="settings" element={<SettingsPage />} />
+              <Route path="profile" element={<ProfilePage />} />
             </Route>
           </Route>
 

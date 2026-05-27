@@ -2,11 +2,15 @@ import { useEffect, useRef, useState } from "react";
 
 import { Link, useNavigate } from "react-router";
 import { useSidebar } from "../context/SidebarContext";
-import { LogOut, Search } from "lucide-react";
+import { ChevronDown, LogOut, Search, UserRound } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
+import { Dropdown } from "../components/ui/dropdown/Dropdown";
+import { DropdownItem } from "../components/ui/dropdown/DropdownItem";
 
 const AppHeader: React.FC = () => {
   const [isApplicationMenuOpen, setApplicationMenuOpen] = useState(false);
+  const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
+  const [globalSearch, setGlobalSearch] = useState("");
   const { user, logout } = useAuth();
   const navigate = useNavigate();
   const { isMobileOpen, toggleSidebar, toggleMobileSidebar } = useSidebar();
@@ -22,6 +26,21 @@ const AppHeader: React.FC = () => {
   const toggleApplicationMenu = () => {
     setApplicationMenuOpen(!isApplicationMenuOpen);
   };
+
+  const submitGlobalSearch = (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const query = globalSearch.trim();
+
+    navigate(query ? `/app/bookings?search=${encodeURIComponent(query)}` : "/app/bookings");
+  };
+
+  const userInitials =
+    user?.name
+      ?.split(/\s+/)
+      .filter(Boolean)
+      .slice(0, 2)
+      .map((part) => part[0]?.toUpperCase())
+      .join("") || "M";
 
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -111,17 +130,23 @@ const AppHeader: React.FC = () => {
           </button>
 
           <div className="hidden lg:block">
-            <form>
+            <form onSubmit={submitGlobalSearch}>
               <div className="relative">
                 <Search className="absolute left-4 top-1/2 size-5 -translate-y-1/2 text-gray-500" />
                 <input
                   ref={inputRef}
                   type="text"
-                  placeholder="Search bookings from the Bookings page"
+                  placeholder="Search name, email, phone, or ref"
+                  value={globalSearch}
+                  onChange={(event) => setGlobalSearch(event.target.value)}
                   className="dark:bg-dark-900 h-11 w-full rounded-lg border border-gray-200 bg-transparent py-2.5 pl-12 pr-14 text-sm text-gray-800 shadow-theme-xs placeholder:text-gray-400 focus:border-brand-300 focus:outline-hidden focus:ring-3 focus:ring-brand-500/10 dark:border-gray-800 dark:bg-gray-900 dark:bg-white/[0.03] dark:text-white/90 dark:placeholder:text-white/30 dark:focus:border-brand-800 xl:w-[430px]"
                 />
 
-                <button className="absolute right-2.5 top-1/2 inline-flex -translate-y-1/2 items-center gap-0.5 rounded-lg border border-gray-200 bg-gray-50 px-[7px] py-[4.5px] text-xs -tracking-[0.2px] text-gray-500 dark:border-gray-800 dark:bg-white/[0.03] dark:text-gray-400">
+                <button
+                  type="button"
+                  onClick={() => inputRef.current?.focus()}
+                  className="absolute right-2.5 top-1/2 inline-flex -translate-y-1/2 items-center gap-0.5 rounded-lg border border-gray-200 bg-gray-50 px-[7px] py-[4.5px] text-xs -tracking-[0.2px] text-gray-500 dark:border-gray-800 dark:bg-white/[0.03] dark:text-gray-400"
+                >
                   <span> ⌘ </span>
                   <span> K </span>
                 </button>
@@ -140,21 +165,66 @@ const AppHeader: React.FC = () => {
             </Link>
           </div>
           <div className="flex items-center gap-3">
-            <div className="hidden text-right sm:block">
-              <p className="text-sm font-medium text-gray-900">{user?.name || "Manager"}</p>
-              <p className="text-xs text-gray-500">{user?.email}</p>
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => setIsUserMenuOpen((current) => !current)}
+                className="dropdown-toggle flex items-center gap-3 rounded-full text-gray-700 dark:text-gray-400"
+              >
+                <span className="flex size-11 items-center justify-center overflow-hidden rounded-full bg-brand-50 text-sm font-semibold text-brand-600 ring-1 ring-brand-100 dark:bg-brand-500/15 dark:text-brand-300 dark:ring-brand-500/20">
+                  {user?.avatar_url ? (
+                    <img src={user.avatar_url} alt={user.name} className="h-full w-full object-cover" />
+                  ) : (
+                    userInitials
+                  )}
+                </span>
+                <span className="hidden text-sm font-medium text-gray-900 dark:text-white/90 sm:block">
+                  {user?.name || "Manager"}
+                </span>
+                <ChevronDown className={`size-4 text-gray-500 transition ${isUserMenuOpen ? "rotate-180" : ""}`} />
+              </button>
+
+              <Dropdown
+                isOpen={isUserMenuOpen}
+                onClose={() => setIsUserMenuOpen(false)}
+                className="right-0 mt-[17px] flex w-[260px] flex-col rounded-2xl border border-gray-200 bg-white p-3 shadow-theme-lg dark:border-gray-800 dark:bg-gray-dark"
+              >
+                <div className="px-2 pb-3">
+                  <span className="block text-sm font-medium text-gray-700 dark:text-gray-300">
+                    {user?.name || "Manager"}
+                  </span>
+                  <span className="mt-0.5 block text-xs text-gray-500 dark:text-gray-400">
+                    {user?.email}
+                  </span>
+                </div>
+
+                <ul className="flex flex-col gap-1 border-y border-gray-200 py-3 dark:border-gray-800">
+                  <li>
+                    <DropdownItem
+                      tag="a"
+                      to="/app/profile"
+                      onItemClick={() => setIsUserMenuOpen(false)}
+                      className="flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-white/5 dark:hover:text-gray-300"
+                    >
+                      <UserRound className="size-5 text-gray-500 dark:text-gray-400" />
+                      Edit profile
+                    </DropdownItem>
+                  </li>
+                </ul>
+
+                <DropdownItem
+                  onItemClick={async () => {
+                    setIsUserMenuOpen(false);
+                    await logout();
+                    navigate("/signin");
+                  }}
+                  className="mt-3 flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-white/5 dark:hover:text-gray-300"
+                >
+                  <LogOut className="size-5 text-gray-500 dark:text-gray-400" />
+                  Logout
+                </DropdownItem>
+              </Dropdown>
             </div>
-            <button
-              type="button"
-              onClick={async () => {
-                await logout();
-                navigate("/signin");
-              }}
-              className="inline-flex h-10 items-center gap-2 rounded-lg border border-gray-300 px-3 text-sm font-medium text-gray-700 hover:bg-gray-50"
-            >
-              <LogOut className="size-4" />
-              Sign out
-            </button>
           </div>
         </div>
       </div>

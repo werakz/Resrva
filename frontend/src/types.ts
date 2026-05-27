@@ -37,6 +37,7 @@ export type User = {
   email: string;
   role: "manager" | "customer";
   status: "active" | "inactive";
+  avatar_url?: string | null;
   created_at?: string;
   updated_at?: string;
 };
@@ -116,31 +117,6 @@ export type TableRecord = {
   table_number: number;
   capacity: number;
   active: number | boolean;
-};
-
-export type AiLog = {
-  id: number;
-  booking_id: number;
-  booking_reference: string;
-  booking_date: string;
-  start_time: string;
-  customer_name: string;
-  suggested_area_name?: string | null;
-  suggested_table_numbers_json: string;
-  final_table_numbers_json: string;
-  explanation: string;
-  overridden: number | boolean;
-  created_at: string;
-};
-
-export type EmailLog = {
-  id: number;
-  booking_reference?: string | null;
-  recipient_email: string;
-  subject: string;
-  body: string;
-  status: string;
-  created_at: string;
 };
 
 export type ActivityLog = {

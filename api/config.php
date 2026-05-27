@@ -30,4 +30,8 @@ return [
         'http://localhost',
         'http://127.0.0.1',
     ],
+    'ai' => [
+        'openai_api_key' => getenv('OPENAI_API_KEY') ?: '',
+        'openai_model' => getenv('OPENAI_MODEL') ?: 'gpt-4o-mini',
+    ],
 ];

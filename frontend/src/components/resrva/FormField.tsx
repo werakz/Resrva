@@ -212,7 +212,7 @@ export function SelectInput({
           id={listboxId}
           role="listbox"
           style={menuPosition}
-          className={`fixed z-999999 overflow-y-auto rounded-xl border border-gray-200 bg-white p-1 shadow-theme-lg dark:border-gray-800 dark:bg-gray-dark ${menuClassName}`}
+          className={`fixed z-[2147483647] overflow-y-auto rounded-xl border border-gray-200 bg-white p-1 shadow-theme-lg dark:border-gray-800 dark:bg-gray-dark ${menuClassName}`}
         >
           {options.map((option, index) => {
             const isSelected = option.value === value;

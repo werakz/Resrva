@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useLocation } from "react-router";
 import {
-  Bot,
   CalendarDays,
   LayoutDashboard,
   ListChecks,
@@ -45,11 +44,6 @@ const navItems: NavItem[] = [
     icon: <Table2 className="size-5" />,
     name: "Tables / Areas",
     path: "/app/tables",
-  },
-  {
-    icon: <Bot className="size-5" />,
-    name: "AI Log",
-    path: "/app/ai-log",
   },
   {
     icon: <Users className="size-5" />,

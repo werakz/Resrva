@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useLocation } from "react-router";
 import flatpickr from "flatpickr";
 import type { Instance as FlatpickrInstance } from "flatpickr/dist/types/instance";
 import {
+  AlertTriangle,
   ArrowUpDown,
   CalendarDays,
   CalendarCheck,
@@ -30,6 +32,13 @@ import {
 } from "../components/resrva/FormField";
 import { LoadingState } from "../components/resrva/LoadingState";
 import { PageHeader } from "../components/resrva/PageHeader";
+import {
+  AiReplyComposer,
+  replyPurposeForStatus,
+  statusNeedsCustomerNotice,
+  type ReplyPurpose,
+} from "../components/resrva/AiReplyComposer";
+import { CustomerNotifyPrompt } from "../components/resrva/CustomerNotifyPrompt";
 import Button from "../components/ui/button/Button";
 import Badge from "../components/ui/badge/Badge";
 import { Table, TableBody, TableCell, TableHeader, TableRow } from "../components/ui/table";
@@ -166,8 +175,55 @@ const statusControlStyles: Record<string, string> = {
   no_show: "!border-gray-200 !bg-gray-100 !text-gray-700 dark:!border-gray-700 dark:!bg-white/5 dark:!text-white/80",
 };
 
+type NotifyPromptState = {
+  booking: Booking;
+  purpose: ReplyPurpose;
+  message: string;
+};
+
+function customerNoticeForStatusChange(previousStatus: string, nextStatus: string, booking: Booking): NotifyPromptState | null {
+  if (previousStatus === nextStatus || !statusNeedsCustomerNotice(nextStatus)) {
+    return null;
+  }
+
+  const message =
+    nextStatus === "confirmed" || nextStatus === "approved"
+      ? "This booking is now confirmed. Do you want to draft a confirmation reply for the customer?"
+      : nextStatus === "declined"
+        ? "This booking has been declined. Do you want to draft a polite reply for the customer?"
+        : "This booking has been cancelled. Do you want to draft an update for the customer?";
+
+  return {
+    booking,
+    purpose: replyPurposeForStatus(nextStatus),
+    message,
+  };
+}
+
 function todayIso() {
   return toIsoDate(new Date());
+}
+
+function bookingFiltersFromLocation(search: string) {
+  const query = (new URLSearchParams(search).get("search") || "").trim();
+
+  if (query) {
+    return {
+      search: query,
+      status: "",
+      date_from: "",
+      date_to: "",
+      date_scope: "" as DateScope,
+    };
+  }
+
+  return {
+    search: "",
+    status: "",
+    date_from: todayIso(),
+    date_to: todayIso(),
+    date_scope: "today" as DateScope,
+  };
 }
 
 function addDaysIso(days: number) {
@@ -216,7 +272,7 @@ function parseTableIds(value?: string | null): string[] {
     : [];
 }
 
-function activeTable(table: TableRecord): boolean {
+function reservableTable(table: TableRecord): boolean {
   return Boolean(Number(table.active));
 }
 
@@ -285,6 +341,10 @@ function TablePicker({
   availabilityLabel?: string;
   isAvailabilityLoading?: boolean;
 }) {
+  const [walkInConfirmation, setWalkInConfirmation] = useState<{
+    tableId: string;
+    tableNumber: number;
+  } | null>(null);
   const selected = new Set(selectedIds);
   const unavailable = unavailableTableIds ?? new Set<string>();
   const blockedAreas = blockedAreaIds ?? new Set<number>();
@@ -294,8 +354,8 @@ function TablePicker({
   const selectedCapacity = selectedTables.reduce((total, table) => total + Number(table.capacity), 0);
   const selectedNumbers = selectedTables.map((table) => table.table_number).join(", ");
 
-  const toggleTable = (tableId: string, unavailableTable = false) => {
-    if (unavailableTable && !selected.has(tableId)) {
+  const toggleTable = (tableId: string, bookedTable = false, walkInTable = false, tableNumber = 0) => {
+    if (bookedTable && !selected.has(tableId)) {
       return;
     }
 
@@ -304,96 +364,169 @@ function TablePicker({
       return;
     }
 
+    if (walkInTable) {
+      setWalkInConfirmation({ tableId, tableNumber });
+      return;
+    }
+
     onChange([...selectedIds, tableId]);
   };
 
+  const confirmWalkInTable = () => {
+    if (!walkInConfirmation) return;
+
+    if (!selected.has(walkInConfirmation.tableId)) {
+      onChange([...selectedIds, walkInConfirmation.tableId]);
+    }
+
+    setWalkInConfirmation(null);
+  };
+
   return (
-    <div className="rounded-lg border border-gray-200 bg-white dark:border-gray-800 dark:bg-gray-900">
-      <div className="flex flex-col gap-2 border-b border-gray-200 px-3 py-2 sm:flex-row sm:items-center sm:justify-between dark:border-gray-800">
-        <div className="text-theme-xs text-gray-500 dark:text-gray-400">
-          <span className="font-medium text-gray-800 dark:text-white/90">
-            {selectedIds.length ? `Table ${selectedNumbers}` : "No tables selected"}
-          </span>
-          {selectedIds.length ? <span className="ml-2">Capacity {selectedCapacity}</span> : null}
+    <>
+      <div className="rounded-lg border border-gray-200 bg-white dark:border-gray-800 dark:bg-gray-900">
+        <div className="flex flex-col gap-2 border-b border-gray-200 px-3 py-2 sm:flex-row sm:items-center sm:justify-between dark:border-gray-800">
+          <div className="text-theme-xs text-gray-500 dark:text-gray-400">
+            <span className="font-medium text-gray-800 dark:text-white/90">
+              {selectedIds.length ? `Table ${selectedNumbers}` : "No tables selected"}
+            </span>
+            {selectedIds.length ? <span className="ml-2">Capacity {selectedCapacity}</span> : null}
+          </div>
+          <div className="flex flex-wrap items-center gap-2 text-theme-xs">
+            <span className="inline-flex items-center gap-1 text-gray-500 dark:text-gray-400">
+              <span className="size-2 rounded-full bg-white ring-1 ring-gray-300" />
+              Available
+            </span>
+            <span className="inline-flex items-center gap-1 text-gray-500 dark:text-gray-400">
+              <span className="size-2 rounded-full bg-gray-200 ring-1 ring-gray-300" />
+              Walk-ins
+            </span>
+            <span className="inline-flex items-center gap-1 text-error-600">
+              <span className="size-2 rounded-full bg-error-100 ring-1 ring-error-200" />
+              Booked
+            </span>
+            {selectedIds.length ? (
+              <button
+                type="button"
+                onClick={() => onChange([])}
+                className="ml-1 w-fit font-medium text-brand-500 hover:text-brand-600"
+              >
+                Clear
+              </button>
+            ) : null}
+          </div>
         </div>
-        <div className="flex flex-wrap items-center gap-2 text-theme-xs">
-          <span className="inline-flex items-center gap-1 text-gray-500 dark:text-gray-400">
-            <span className="size-2 rounded-full bg-white ring-1 ring-gray-300" />
-            Available
-          </span>
-          <span className="inline-flex items-center gap-1 text-error-600">
-            <span className="size-2 rounded-full bg-error-100 ring-1 ring-error-200" />
-            Booked
-          </span>
-          {selectedIds.length ? (
-            <button
-              type="button"
-              onClick={() => onChange([])}
-              className="ml-1 w-fit font-medium text-brand-500 hover:text-brand-600"
-            >
-              Clear
-            </button>
-          ) : null}
+        {availabilityLabel || isAvailabilityLoading ? (
+          <div className="border-b border-gray-100 px-3 py-2 text-theme-xs text-gray-500 dark:border-gray-800 dark:text-gray-400">
+            {isAvailabilityLoading ? "Checking availability..." : availabilityLabel}
+          </div>
+        ) : null}
+        <div className="max-h-[360px] space-y-2 overflow-y-auto p-3">
+        {areas.map((area) => {
+          const areaTables = tables
+            .filter((table) => Number(table.area_id) === Number(area.id))
+            .sort((left, right) => Number(left.table_number) - Number(right.table_number));
+
+          if (!areaTables.length) {
+            return null;
+          }
+
+          const areaBlocked = blockedAreas.has(Number(area.id));
+          const bookedCount = areaTables.filter((table) => areaBlocked || unavailable.has(String(table.id))).length;
+          const reservableCount = areaTables.filter(reservableTable).length;
+
+          return (
+            <div key={area.id} className="rounded-lg border border-gray-100 bg-gray-50 p-2.5 dark:border-gray-800 dark:bg-white/[0.03]">
+              <div className="mb-2 flex items-center justify-between gap-3">
+                <p className="text-xs font-semibold uppercase text-gray-500">{area.name}</p>
+                <span className="text-xs text-gray-400">
+                  {bookedCount ? `${bookedCount} booked` : `${reservableCount}/${areaTables.length} reservable`}
+                </span>
+              </div>
+              <div className="grid grid-cols-6 gap-1.5 sm:grid-cols-8 md:grid-cols-10">
+                {areaTables.map((table) => {
+                  const id = String(table.id);
+                  const isSelected = selected.has(id);
+                  const isBooked = areaBlocked || unavailable.has(id);
+                  const isWalkInTable = !reservableTable(table);
+
+                  return (
+                    <button
+                      key={table.id}
+                      type="button"
+                      aria-pressed={isSelected}
+                      disabled={isBooked && !isSelected}
+                      title={
+                        isBooked
+                          ? "Booked for the selected date and time"
+                          : isWalkInTable
+                            ? "Usually reserved for walk-ins"
+                            : "Reservable"
+                      }
+                      onClick={() => toggleTable(id, isBooked, isWalkInTable, Number(table.table_number))}
+                      className={`h-8 rounded-lg border text-theme-xs font-semibold ${
+                        isSelected
+                          ? "border-brand-600 bg-brand-600 text-white shadow-theme-xs"
+                          : isBooked
+                            ? "cursor-not-allowed border-error-200 bg-error-50 text-error-600 opacity-80"
+                            : isWalkInTable
+                              ? "border-gray-200 bg-gray-100 text-gray-500 opacity-80 hover:border-gray-300 hover:bg-gray-200"
+                              : "border-gray-300 bg-white text-gray-700 hover:bg-gray-50"
+                      }`}
+                    >
+                      {table.table_number}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })}
         </div>
       </div>
-      {availabilityLabel || isAvailabilityLoading ? (
-        <div className="border-b border-gray-100 px-3 py-2 text-theme-xs text-gray-500 dark:border-gray-800 dark:text-gray-400">
-          {isAvailabilityLoading ? "Checking availability..." : availabilityLabel}
-        </div>
-      ) : null}
-      <div className="max-h-[360px] space-y-2 overflow-y-auto p-3">
-      {areas.map((area) => {
-        const areaTables = tables
-          .filter((table) => Number(table.area_id) === Number(area.id) && activeTable(table))
-          .sort((left, right) => Number(left.table_number) - Number(right.table_number));
 
-        if (!areaTables.length) {
-          return null;
-        }
-
-        const areaBlocked = blockedAreas.has(Number(area.id));
-        const bookedCount = areaTables.filter((table) => areaBlocked || unavailable.has(String(table.id))).length;
-
-        return (
-          <div key={area.id} className="rounded-lg border border-gray-100 bg-gray-50 p-2.5 dark:border-gray-800 dark:bg-white/[0.03]">
-            <div className="mb-2 flex items-center justify-between gap-3">
-              <p className="text-xs font-semibold uppercase text-gray-500">{area.name}</p>
-              <span className="text-xs text-gray-400">
-                {bookedCount ? `${bookedCount} booked` : `${areaTables.length} tables`}
+      {walkInConfirmation ? (
+        <div
+          className="fixed inset-0 z-[1000000] flex items-center justify-center bg-black/40 px-4 py-8"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="walk-in-table-confirm-title"
+        >
+          <div className="w-full max-w-[420px] rounded-2xl border border-gray-200 bg-white p-5 shadow-theme-xl dark:border-gray-800 dark:bg-gray-900">
+            <div className="flex items-start gap-4">
+              <span className="flex size-11 shrink-0 items-center justify-center rounded-full bg-warning-50 text-warning-600 dark:bg-warning-500/15 dark:text-orange-400">
+                <AlertTriangle className="size-5" />
               </span>
+              <div className="min-w-0">
+                <h3 id="walk-in-table-confirm-title" className="text-base font-semibold text-gray-900 dark:text-white/90">
+                  Use walk-in table?
+                </h3>
+                <p className="mt-2 text-sm leading-6 text-gray-500 dark:text-gray-400">
+                  Table {walkInConfirmation.tableNumber} is usually reserved for walk-ins. Are you sure you want to assign it to this booking?
+                </p>
+              </div>
             </div>
-            <div className="grid grid-cols-6 gap-1.5 sm:grid-cols-8 md:grid-cols-10">
-              {areaTables.map((table) => {
-                const id = String(table.id);
-                const isSelected = selected.has(id);
-                const isUnavailable = areaBlocked || unavailable.has(id);
 
-                return (
-                  <button
-                    key={table.id}
-                    type="button"
-                    aria-pressed={isSelected}
-                    disabled={isUnavailable && !isSelected}
-                    title={isUnavailable ? "Booked for the selected date and time" : "Available"}
-                    onClick={() => toggleTable(id, isUnavailable)}
-                    className={`h-8 rounded-lg border text-theme-xs font-semibold ${
-                      isSelected
-                        ? "border-brand-600 bg-brand-600 text-white shadow-theme-xs"
-                        : isUnavailable
-                          ? "cursor-not-allowed border-error-200 bg-error-50 text-error-600 opacity-80"
-                        : "border-gray-300 bg-white text-gray-700 hover:bg-gray-50"
-                    }`}
-                  >
-                    {table.table_number}
-                  </button>
-                );
-              })}
+            <div className="mt-6 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+              <button
+                type="button"
+                onClick={() => setWalkInConfirmation(null)}
+                className="inline-flex h-10 items-center justify-center rounded-lg border border-gray-300 bg-white px-4 text-sm font-medium text-gray-700 hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-300 dark:hover:bg-white/5"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={confirmWalkInTable}
+                className="inline-flex h-10 items-center justify-center rounded-lg bg-brand-600 px-4 text-sm font-medium text-white shadow-theme-xs hover:bg-brand-700"
+              >
+                Select table
+              </button>
             </div>
           </div>
-        );
-      })}
-      </div>
-    </div>
+        </div>
+      ) : null}
+    </>
   );
 }
 
@@ -994,16 +1127,11 @@ function BookingRow({
 }
 
 export default function BookingsPage() {
+  const location = useLocation();
   const [meta, setMeta] = useState<MetaPayload | null>(null);
   const [tablesData, setTablesData] = useState<TablesPayload | null>(null);
   const [data, setData] = useState<Paginated<Booking> | null>(null);
-  const [filters, setFilters] = useState(() => ({
-    search: "",
-    status: "",
-    date_from: todayIso(),
-    date_to: todayIso(),
-    date_scope: "today" as DateScope,
-  }));
+  const [filters, setFilters] = useState(() => bookingFiltersFromLocation(location.search));
   const [page, setPage] = useState(1);
   const [form, setForm] = useState<ManualBookingForm>(emptyManualBooking);
   const [isCreateOpen, setIsCreateOpen] = useState(false);
@@ -1027,6 +1155,9 @@ export default function BookingsPage() {
   });
   const [message, setMessage] = useState<{ type: "error" | "success"; text: string } | null>(null);
   const [modalMessage, setModalMessage] = useState<{ type: "error" | "success"; text: string } | null>(null);
+  const [notifyPrompt, setNotifyPrompt] = useState<NotifyPromptState | null>(null);
+  const [replyTarget, setReplyTarget] = useState<Booking | null>(null);
+  const [replyOpenRequest, setReplyOpenRequest] = useState<{ token: number; purpose: ReplyPurpose } | undefined>();
 
   const query = useMemo(() => {
     const params = new URLSearchParams({ page: String(page), per_page: "50", type: "all" });
@@ -1056,6 +1187,11 @@ export default function BookingsPage() {
       });
     });
   }, [loadBookings]);
+
+  useEffect(() => {
+    setPage(1);
+    setFilters(bookingFiltersFromLocation(location.search));
+  }, [location.search]);
 
   useEffect(() => {
     if (!isCreateOpen || !form.date) {
@@ -1235,6 +1371,12 @@ export default function BookingsPage() {
     setEditingBooking(null);
   };
 
+  const openReplyFromPrompt = (booking: Booking, purpose: ReplyPurpose) => {
+    setReplyTarget(booking);
+    setNotifyPrompt(null);
+    setReplyOpenRequest({ token: Date.now(), purpose });
+  };
+
   const updateFilter = (field: keyof typeof filters, value: string) => {
     setPage(1);
     setFilters((current) => ({
@@ -1324,11 +1466,15 @@ export default function BookingsPage() {
     setStatusEdits((current) => ({ ...current, [booking.id]: status }));
 
     try {
-      await apiFetch<{ item: Booking }>(`bookings/${booking.id}`, {
+      const response = await apiFetch<{ item: Booking }>(`bookings/${booking.id}`, {
         method: "PUT",
         ...toJsonBody({ status }),
       });
       setMessage({ type: "success", text: `${booking.booking_reference} updated.` });
+      const prompt = customerNoticeForStatusChange(booking.status, status, response.item);
+      if (prompt) {
+        setNotifyPrompt(prompt);
+      }
       setStatusEdits((current) => {
         const next = { ...current };
         delete next[booking.id];
@@ -1369,7 +1515,7 @@ export default function BookingsPage() {
     }
 
     try {
-      await apiFetch<{ item: Booking }>(`bookings/${editingBooking.id}`, {
+      const response = await apiFetch<{ item: Booking }>(`bookings/${editingBooking.id}`, {
         method: "PUT",
         ...toJsonBody({
           name: editForm.name,
@@ -1387,9 +1533,14 @@ export default function BookingsPage() {
       });
 
       setMessage({ type: "success", text: "Booking updated." });
+      const nextStatus = editForm.status || editingBooking.status;
+      const prompt = customerNoticeForStatusChange(editingBooking.status, nextStatus, response.item);
       closeEditModal();
       setEditForm(emptyManualBooking);
       await loadBookings();
+      if (prompt) {
+        setNotifyPrompt(prompt);
+      }
     } catch (err) {
       setModalMessage({
         type: "error",
@@ -1408,6 +1559,25 @@ export default function BookingsPage() {
 
   return (
     <>
+      {notifyPrompt ? (
+        <CustomerNotifyPrompt
+          booking={notifyPrompt.booking}
+          purpose={notifyPrompt.purpose}
+          message={notifyPrompt.message}
+          onDismiss={() => setNotifyPrompt(null)}
+          onDraft={openReplyFromPrompt}
+        />
+      ) : null}
+
+      {replyTarget ? (
+        <AiReplyComposer
+          booking={replyTarget}
+          onLogged={loadBookings}
+          openRequest={replyOpenRequest}
+          buttonClassName="hidden"
+        />
+      ) : null}
+
       <PageHeader
         title="Bookings"
         action={
@@ -1613,14 +1783,17 @@ export default function BookingsPage() {
               <h2 id="edit-booking-title" className="text-base font-semibold text-gray-900 dark:text-white/90">
                 Edit booking
               </h2>
-              <button
-                type="button"
-                onClick={closeEditModal}
-                className="flex size-8 items-center justify-center rounded-lg border border-gray-300 text-gray-500 hover:bg-gray-50 dark:border-gray-700 dark:hover:bg-white/5"
-                aria-label="Close edit booking modal"
-              >
-                <X className="size-4" />
-              </button>
+              <div className="flex items-center gap-2">
+                <AiReplyComposer booking={editingBooking} onLogged={loadBookings} />
+                <button
+                  type="button"
+                  onClick={closeEditModal}
+                  className="flex size-8 items-center justify-center rounded-lg border border-gray-300 text-gray-500 hover:bg-gray-50 dark:border-gray-700 dark:hover:bg-white/5"
+                  aria-label="Close edit booking modal"
+                >
+                  <X className="size-4" />
+                </button>
+              </div>
             </div>
 
             <form onSubmit={saveEditBooking} className="max-h-[calc(100vh-8rem)] overflow-y-auto p-4">

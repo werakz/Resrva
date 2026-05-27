@@ -27,6 +27,7 @@ CREATE TABLE users (
   role ENUM('manager', 'customer') NOT NULL DEFAULT 'manager',
   password_hash VARCHAR(255) NOT NULL,
   status ENUM('active', 'inactive') NOT NULL DEFAULT 'active',
+  avatar_url VARCHAR(255) NULL,
   created_at DATETIME NOT NULL,
   updated_at DATETIME NOT NULL
 ) ENGINE=InnoDB;
