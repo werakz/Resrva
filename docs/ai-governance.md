@@ -1,61 +1,71 @@
 # AI Governance Appendix
 
-## AI Feature
+## AI Feature Chosen
 
-Resrva implements an AI-assisted automatic table assignment feature. The system recommends the best table or table set for a booking based on rules and current database state.
+Resrva implements an AI-assisted customer reply composer for managers. The feature appears inside booking/function management and drafts a customer-facing email reply using the selected booking, reply type, and manager instructions.
 
-## Why This Is Low Risk
+The AI does not create, approve, cancel, or send bookings automatically. It only drafts text for a manager to review.
 
-- It runs locally in PHP and MySQL.
-- It does not send personal data to a public AI provider.
-- It produces explainable recommendations instead of opaque generated text.
-- Managers can review, accept, or override the result.
-- Suggestions and overrides are logged for auditability.
+## AI Provider
 
-## Data Used
+The backend supports two modes:
 
-The assignment engine uses:
+- OpenAI Chat Completions API when `OPENAI_API_KEY` is configured in `api/config.php` or the environment.
+- Local deterministic fallback when no API key is configured.
 
+The default configured OpenAI model is `gpt-4o-mini`. The local fallback model label is `resrva-reply-drafter`.
+
+## Data Handling
+
+The AI reply prompt can include:
+
+- Booking reference.
+- Booking type and status.
+- Customer name.
 - Booking date and time.
 - Guest count.
-- Customer preferred area, if supplied.
-- Booking duration.
-- Active tables and capacities.
-- Existing overlapping bookings.
-- Approved or confirmed function blocks.
+- Area/table summary.
+- Event type, if it is a function.
+- Guest notes or staff notes only when relevant.
+- Manager instructions entered in the composer.
 
-It does not need customer names, emails, or phone numbers to calculate the table recommendation.
+The AI feature does not need account passwords, payment information, or unrelated customer history. The app is designed for a local XAMPP demo, and generated replies are stored as simulated email logs rather than sent through SMTP.
+
+## Prompt Approach
+
+The prompt instructs the model to:
+
+- Write a warm, concise customer email for Old Canberra Inn.
+- Return strict JSON with `subject` and `body`.
+- Use a professional, helpful, friendly tone.
+- Transform manager notes into natural customer-facing wording.
+- Avoid copying short manager notes verbatim.
+
+The generated booking details are placed before the sign-off so customers receive a clear message plus reference, date, time, guests, and assigned area/table details.
 
 ## Human-in-the-Loop Mechanism
 
-For public table bookings, the system creates the booking automatically because the rule set is deterministic and auditable. Managers can still review, update status, edit tables, or override records afterward.
+The manager remains responsible for the final message:
 
-For function requests, the system does not auto-confirm. A manager must review the request, choose the final area, write a customer message, and approve/confirm/decline it.
+1. Manager opens the AI reply composer.
+2. Manager selects a reply type and optionally enters instructions.
+3. The system generates a draft.
+4. Manager reviews and edits the subject/body.
+5. Manager saves the reviewed reply to email history.
 
-## Logging
-
-Every assignment creates an `ai_assignment_logs` record containing:
-
-- Booking reference.
-- Suggested area.
-- Suggested table numbers.
-- Explanation.
-- Rules snapshot.
-- Final table numbers.
-- Whether the manager overrode the recommendation.
-- Timestamp.
+The app does not auto-send AI content. Logging the reply is an explicit manager action.
 
 ## Limitations
 
-- The engine assumes all tables have capacity 8 by default unless managers update them.
-- It does not model physical table distance beyond same-area and consecutive table-number preference.
-- It does not know special venue operations unless managers enter them into settings or table availability.
-- It simulates intelligence through local rules and auditability rather than a generative AI model.
+- AI text can be inaccurate, overly generic, or misunderstand short instructions.
+- External AI is only available when an API key and internet connection are configured.
+- The local fallback is predictable and safer for demo use, but less flexible than a generative model.
+- The AI cannot verify real-world venue constraints unless those details are present in the booking, settings, or manager instructions.
 
 ## Mitigations
 
-- Managers can mark tables inactive.
-- Managers can override table assignments.
-- Function areas are blocked during confirmed function bookings.
-- All recommendations are explainable and logged.
-- Sensitive personal data remains local.
+- Human review is required before the reply is logged.
+- The prompt limits scope to concise hospitality booking replies.
+- The local fallback keeps the demo working without external data transfer.
+- Activity logs record generated AI reply actions.
+- Managers can edit or discard drafts before use.

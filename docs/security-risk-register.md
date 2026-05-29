@@ -1,14 +1,16 @@
 # Security and Risk Register
 
 | Risk | Impact | Mitigation |
-| --- | --- | --- |
-| SQL injection through forms or filters | Data leakage or corruption | All database access uses PDO prepared statements and typed parameters. |
-| Weak password storage | Manager account compromise | Manager passwords are stored with PHP `password_hash`; login uses `password_verify`. |
-| Unauthorised dashboard access | Booking/customer data exposure | Manager routes require an active authenticated session and role check. |
-| Invalid or malicious booking input | Bad records, double bookings, unreliable data | Client-side validation is supported by server-side validation for email, phone, date, time, guest limits, and opening hours. |
-| Double booking overlapping tables | Operational conflict | Assignment checks booking date/time overlap before choosing tables. |
-| AI recommendation accepted blindly | Poor table allocation or unfair decision | AI assignment is local, explainable, logged, and manager-overridable. |
-| Sensitive data sent to external AI | Privacy breach | No public AI service is called; customer data remains in local MySQL. |
-| Real email failures in demo | Missing confirmation evidence | Email is simulated through `email_logs` so messages are auditable in XAMPP. |
-| Dependency vulnerabilities | Security exposure in production | npm audit advisories are documented; production handover should upgrade and retest dependencies. |
-| Local config leakage | Password exposure | Machine-specific config can be placed in ignored `api/config.local.php`. |
+| SQL injection through forms, filters, or IDs | Data leakage, booking tampering, or database corruption | Backend database access uses PHP PDO prepared statements, typed parameters, and server-side validation before SQL execution. |
+| Unauthorised dashboard access | Customer data, settings, and manager tools could be exposed | Manager routes require an authenticated session and active manager account. Passwords are stored with `password_hash` and verified with `password_verify`. |
+| Invalid booking data or double booking | Operational conflict, incorrect capacity, or poor customer experience | Server-side validation checks dates, times, guest limits, opening hours, blocked dates, overlapping bookings, and function area clashes. |
+| AI reply contains incorrect, unsafe, or misleading wording | Customer confusion, reputational risk, or unapproved promises | AI output is a draft only. Managers must review/edit before logging. The prompt instructs concise hospitality wording and the local fallback uses controlled templates. |
+| Sensitive customer data sent to external AI | Privacy risk if OpenAI is configured | OpenAI use is optional and controlled by `OPENAI_API_KEY`. The app still works with a local deterministic fallback. Only booking context needed for the reply is sent, and replies are reviewed by managers before use. |
+
+## Additional Controls
+
+- File uploads are limited to image MIME types and a 5 MB maximum.
+- `api/config.local.php` can hold machine-specific credentials and is ignored by Git.
+- Email sending is simulated through `email_logs` for auditable local demo evidence.
+- Activity logging records important manager actions for traceability.
+- `npm audit`, PHP syntax checks, linting, and production build checks are used before submission.

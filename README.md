@@ -17,6 +17,14 @@ Resrva is a full-stack restaurant reservation management system built for the Ol
 
 Customers do not log in. They use the public table booking and function request forms.
 
+## Deployment / Demo Link
+
+This assessment build is designed for local XAMPP deployment.
+
+- Local frontend demo: `http://localhost:5173`
+- Local PHP API through XAMPP: `http://localhost/Resrva/api/index.php`
+- PHP built-in API alternative: `http://127.0.0.1:8000/index.php`
+
 ## Main Features
 
 - Public table booking form with editable booking terms.
@@ -115,14 +123,20 @@ docs/                Assessment documentation and evidence
 frontend/            React manager dashboard and public booking forms
 ```
 
+## Documentation Pack
+
+- `docs/project-proposal.md`
+- `docs/system-design.md`
+- `docs/security-risk-register.md`
+- `docs/test-evidence.md`
+- `docs/ai-governance.md`
+- `docs/submission-checklist.md`
+- `docs/Resrva-assignment-presentation.pptx`
+
 ## AI Use Statement
 
 Resrva includes an AI-assisted reply composer for managers. It uses booking context, status, customer details, and a manager instruction to draft a customer-facing response. If an `OPENAI_API_KEY` is configured in `api/config.php`, the API can use OpenAI for the draft; otherwise it falls back to a local deterministic draft generator.
 
 AI output is not sent automatically. Managers must review the draft before using it, and the system logs the generated reply action for audit evidence.
 
-## Notes For Submission
 
-- Runtime logs, build output, uploads, and dependencies are ignored by Git.
-- Email sending is simulated through database logging because SMTP credentials are not required for the local demo.
-- The checked-in source has been trimmed to the Resrva application and shared UI primitives used by the app.
