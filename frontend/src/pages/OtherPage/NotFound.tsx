@@ -10,7 +10,7 @@ export default function NotFound() {
       />
       <div className="flex min-h-screen items-center justify-center bg-gray-50 p-6">
         <div className="w-full max-w-md rounded-lg border border-gray-200 bg-white p-8 text-center shadow-theme-sm">
-          <img src="/images/logo/resrva-mark.svg" alt="Resrva" className="mx-auto size-16" />
+          <img src="/images/logo/resrva-logo.png" alt="Resrva" className="mx-auto size-16 object-cover" />
           <p className="mt-6 text-sm font-semibold uppercase tracking-wide text-brand-700">404</p>
           <h1 className="mt-2 text-2xl font-semibold text-gray-950">Page not found</h1>
           <p className="mt-3 text-sm leading-6 text-gray-500">

@@ -103,7 +103,7 @@ const AppHeader: React.FC = () => {
           </button>
 
           <Link to="/app" className="flex items-center gap-2 lg:hidden">
-            <img src="/images/logo/resrva-mark.svg" alt="Resrva" className="size-9 rounded-lg" />
+            <img src="/images/logo/resrva-logo.png" alt="Resrva" className="size-9 rounded-lg object-cover" />
             <span className="font-semibold text-gray-900">Resrva</span>
           </Link>
 

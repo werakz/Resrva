@@ -60,6 +60,11 @@ const services = [
   { label: "Function", value: "function", time: "18:00" },
 ] as const;
 
+type TimeOption = {
+  value: string;
+  label: string;
+};
+
 function todayIso() {
   return new Date().toISOString().slice(0, 10);
 }
@@ -93,6 +98,71 @@ function selectedDateParts(iso: string) {
     year: date.getFullYear(),
     label: shortDate(toIsoDate(date)),
   };
+}
+
+function minutesFromTime(time: string) {
+  const [hours, minutes] = time.slice(0, 5).split(":").map(Number);
+
+  return hours * 60 + minutes;
+}
+
+function timeFromMinutes(totalMinutes: number) {
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+
+  return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
+}
+
+function displayTime(value: string) {
+  const [hours, minutes] = value.split(":").map(Number);
+  const period = hours >= 12 ? "PM" : "AM";
+  const displayHours = hours % 12 || 12;
+
+  return `${displayHours}:${String(minutes).padStart(2, "0")} ${period}`;
+}
+
+function dayOfWeekFromIso(iso: string) {
+  return new Date(`${iso}T00:00:00`).getDay();
+}
+
+function buildTimeOptions(
+  service: BookingForm["service"],
+  date: string,
+  meta: MetaPayload | null,
+): TimeOption[] {
+  if (!service || !date) {
+    return [];
+  }
+
+  const dayOfWeek = dayOfWeekFromIso(date);
+  const openingHours = meta?.opening_hours.find((hours) => Number(hours.day_of_week) === dayOfWeek);
+  if (!openingHours || Number(openingHours.is_closed) === 1) {
+    return [];
+  }
+
+  const openMinutes = minutesFromTime(openingHours.opens_at);
+  const closeMinutes = minutesFromTime(openingHours.closes_at);
+  const interval = Math.max(Number(meta?.settings.slot_interval_minutes || 30), 15);
+  const duration = service === "function" ? 180 : Number(meta?.settings.default_duration_minutes || 120);
+  const latestStart = closeMinutes - duration;
+  const serviceStart = service === "dinner" ? 17 * 60 : openMinutes;
+  const serviceEnd = service === "lunch" ? Math.min(17 * 60 - interval, latestStart) : latestStart;
+  const start = Math.max(openMinutes, serviceStart);
+  const end = Math.min(latestStart, serviceEnd);
+
+  if (end < start) {
+    return [];
+  }
+
+  const firstSlot = Math.ceil(start / interval) * interval;
+  const options: TimeOption[] = [];
+
+  for (let minutes = firstSlot; minutes <= end; minutes += interval) {
+    const value = timeFromMinutes(minutes);
+    options.push({ value, label: displayTime(value) });
+  }
+
+  return options;
 }
 
 function buildCalendarDays(monthDate: Date): CalendarDay[] {
@@ -313,8 +383,24 @@ export default function PublicBooking() {
       serviceValue === "function" ? functionRequestsEnabled : tableBookingsEnabled,
     [functionRequestsEnabled, tableBookingsEnabled],
   );
+  const timeOptions = useMemo(
+    () => buildTimeOptions(form.service, form.date, meta),
+    [form.date, form.service, meta],
+  );
+  const selectedTimeValue = timeOptions.some((option) => option.value === form.time) ? form.time : "";
   const selectedAreaName =
     meta?.areas.find((area) => String(area.id) === form.preferred_area_id)?.name || "No preference";
+
+  useEffect(() => {
+    if (!form.service || timeOptions.length === 0) {
+      return;
+    }
+
+    if (!timeOptions.some((option) => option.value === form.time)) {
+      setForm((current) => ({ ...current, time: timeOptions[0].value }));
+    }
+  }, [form.service, form.time, timeOptions]);
+
   const policyMessage = useMemo(() => {
     const min = Number(meta?.settings.min_table_guests || 8);
     const max = Number(meta?.settings.max_table_guests || 29);
@@ -342,12 +428,15 @@ export default function PublicBooking() {
     if (!form.service) {
       return "Please choose a service.";
     }
+    if (timeOptions.length === 0) {
+      return "No online booking times are available for that service on this date.";
+    }
     if (!form.time) {
       return "Please choose a time.";
     }
 
     return null;
-  }, [blockedOnlineDateSet, form.date, form.service, form.time, guestCount, meta, serviceEnabled]);
+  }, [blockedOnlineDateSet, form.date, form.service, form.time, guestCount, meta, serviceEnabled, timeOptions.length]);
 
   const detailsComplete = Boolean(form.name.trim() && form.email && form.phone && form.terms_agreed);
 
@@ -387,10 +476,11 @@ export default function PublicBooking() {
       return;
     }
 
+    const nextTimeOptions = buildTimeOptions(service.value as BookingForm["service"], form.date, meta);
     const nextForm = {
       ...form,
       service: service.value as BookingForm["service"],
-      time: service.time,
+      time: nextTimeOptions[0]?.value || service.time,
       event_type: service.value === "function" ? form.event_type || "Function" : "",
     };
     setForm(nextForm);
@@ -419,7 +509,6 @@ export default function PublicBooking() {
       return;
     }
 
-    setStep(2);
   };
 
   const goNext = () => {
@@ -478,7 +567,7 @@ export default function PublicBooking() {
           title: "Function request submitted",
           body: "A manager will review your request before confirmation.",
           service: "Function",
-          date: shortDate(form.date),
+          date: `${shortDate(form.date)} at ${displayTime(form.time)}`,
           email: form.email,
         });
         return;
@@ -506,7 +595,7 @@ export default function PublicBooking() {
         title: "Booking submitted",
         body: `Your booking has been confirmed in ${response.assigned_area}.`,
         service: activeService?.label || form.time,
-        date: shortDate(form.date),
+        date: `${shortDate(form.date)} at ${displayTime(form.time)}`,
         email: form.email,
       });
     } catch (error) {
@@ -635,6 +724,28 @@ export default function PublicBooking() {
                 </div>
               </Card>
 
+              <Card className="public-booking-time-card">
+                <div className="public-booking-time-heading">
+                  <h2 className="public-booking-card-title">Select a time</h2>
+                  <span>{activeService?.label || "Choose a service first"}</span>
+                </div>
+                <select
+                  aria-label="Booking time"
+                  value={selectedTimeValue}
+                  disabled={!form.service || timeOptions.length === 0}
+                  onChange={(event) => updateField("time", event.target.value)}
+                  className="public-booking-time-select"
+                >
+                  {!form.service ? <option value="">Choose a service first</option> : null}
+                  {form.service && timeOptions.length === 0 ? <option value="">No times available</option> : null}
+                  {timeOptions.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </Card>
+
               {message ? <FormMessage type={message.type}>{message.text}</FormMessage> : null}
             </div>
           </div>
@@ -760,6 +871,10 @@ export default function PublicBooking() {
                 <p className="public-booking-summary-row">
                   <span className="public-booking-summary-label">Date</span>
                   <span>{shortDate(form.date)}</span>
+                </p>
+                <p className="public-booking-summary-row">
+                  <span className="public-booking-summary-label">Time</span>
+                  <span>{displayTime(form.time)}</span>
                 </p>
                 <p className="public-booking-summary-row">
                   <span className="public-booking-summary-label">Service</span>

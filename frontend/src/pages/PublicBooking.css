@@ -144,12 +144,13 @@
   display: grid;
   grid-template-columns: minmax(0, 1.35fr) minmax(320px, 376px);
   gap: 16px;
-  align-items: start;
+  align-items: stretch;
 }
 
 .public-booking-calendar {
   display: grid;
   min-height: 336px;
+  height: 100%;
   overflow: hidden;
   grid-template-columns: 142px 1fr;
   border: 1px solid #e5e7eb;
@@ -177,6 +178,9 @@
 }
 
 .public-booking-calendar-body {
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
   padding: 18px 20px 20px;
 }
 
@@ -219,6 +223,8 @@
 
 .public-booking-calendar-grid {
   display: grid;
+  flex: 1;
+  align-content: space-between;
   grid-template-columns: repeat(7, minmax(0, 1fr));
   row-gap: 8px;
   text-align: center;
@@ -411,6 +417,54 @@
   background: #f2f4f7;
   color: #98a2b3;
   opacity: 0.8;
+}
+
+.public-booking-time-card {
+  padding: 20px;
+}
+
+.public-booking-time-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.public-booking-time-heading span {
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: #e8f7ef;
+  padding: 4px 10px;
+  color: #276749;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.public-booking-time-select {
+  margin-top: 16px;
+  width: 100%;
+  height: 42px;
+  border: 1px solid #d0d5dd;
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: var(--shadow-theme-xs);
+  color: #101828;
+  font: inherit;
+  font-size: 14px;
+  outline: none;
+  padding: 0 14px;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.public-booking-time-select:focus {
+  border-color: #276749;
+  box-shadow: 0 0 0 3px rgba(39, 103, 73, 0.12);
+}
+
+.public-booking-time-select:disabled {
+  cursor: not-allowed;
+  background: #f9fafb;
+  color: #98a2b3;
 }
 
 .public-booking-panel {

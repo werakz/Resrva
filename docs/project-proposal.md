@@ -40,19 +40,4 @@ Resrva will provide:
 
 React is justified because Resrva needs stateful forms, dashboard tables, filtering, calendar interactions, and reusable UI components.
 
-## Milestones
 
-| Milestone | Outcome |
-| --- | --- |
-| Proposal and design | Scope, ERD, architecture, backlog, risk planning |
-| MVP | Auth, public table booking, booking CRUD, database connection |
-| Final delivery | Full dashboard, function requests, AI logs, testing evidence, README, deployable XAMPP build |
-
-## Roles
-
-| Role | Person |
-| --- | --- |
-| Team Lead / Scrum Master | Student |
-| Front-End Lead | Student |
-| Back-End Lead | Student |
-| Data / QA Lead | Student |

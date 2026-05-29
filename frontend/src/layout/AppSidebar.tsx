@@ -273,14 +273,14 @@ const AppSidebar: React.FC = () => {
         <Link to="/app" className="flex items-center gap-3">
           {isExpanded || isHovered || isMobileOpen ? (
             <span className="flex items-center gap-3">
-              <img src="/images/logo/resrva-mark.svg" alt="Resrva" className="size-10 rounded-lg" />
+              <img src="/images/logo/resrva-logo.png" alt="Resrva" className="size-10 rounded-lg object-cover" />
               <span>
                 <span className="block text-lg font-semibold text-gray-900">Resrva</span>
                 <span className="block text-xs text-gray-500">Manager</span>
               </span>
             </span>
           ) : (
-            <img src="/images/logo/resrva-mark.svg" alt="Resrva" className="size-10 rounded-lg" />
+            <img src="/images/logo/resrva-logo.png" alt="Resrva" className="size-10 rounded-lg object-cover" />
           )}
         </Link>
       </div>
