@@ -1,0 +1,91 @@
+# Daily Summary
+
+## 2026-06-11
+
+Today we moved Resrva further from a single-venue booking tool toward a multi-client, multi-venue platform.
+
+### Multi-client and venue setup
+
+- Added the owner/admin direction for managing clients separately from venue managers.
+- Clarified the model:
+  - Resrva owner manages clients.
+  - Each client owns one or more venues.
+  - Venue managers should only see their own venue data.
+- Added/adjusted client and venue management flows so venues can be created and accessed through slug-style URLs such as `/old-canberra-inn`.
+- Tightened the idea that bookings, tables, areas, settings, booking types, and calendar data should be scoped per venue/client.
+
+### Booking types
+
+- Continued building the flexible booking type system for dining, functions, events, and custom types.
+- Added booking type delete support.
+  - If unused, the type can be removed.
+  - If historical bookings exist, it is archived instead so past data stays intact.
+- Moved delete into Additional Settings.
+- Replaced browser confirmation popups with an in-app modal pattern.
+- Added icon picker behavior and made booking type icons show in relevant admin lists.
+- Continued refining booking type settings:
+  - Event end time.
+  - Booking duration.
+  - Booking window.
+  - Multiple weekly days.
+  - Daily, weekly, fortnightly, monthly, custom, and no-repeat scheduling.
+  - Custom date selection through a calendar-style flow.
+- Removed confusing/duplicated rules like separate approval and auto-confirm toggles, moving toward a single Auto Confirmation setting.
+
+### Booking page
+
+- Kept booking type identity out of the booking table rows.
+- Restored the original table/area behavior:
+  - Main row shows the assigned table.
+  - Area shows underneath.
+  - No booking type tag/text appears in the table cell.
+- Added event booking table assignment behavior so event bookings can be assigned to tables like normal bookings.
+- Adjusted event booking availability so reserved event areas can affect table assignment.
+- Group headers can still use booking type identity, but row-level booking data stays focused on the actual booking/table details.
+
+### Calendar
+
+- Added event/function indicators to the calendar view.
+- Kept tags in the same compact row style as the existing Off tag.
+- Changed Function display to use the generic label `Function` instead of showing individual function type names.
+- Made calendar function/event tags use the configured booking type colour where appropriate.
+
+### Tables and areas
+
+- Removed old function-area scheduling logic from the tables/areas page because event/function area reservation now belongs with booking types.
+- Split the reserved area idea away from generic table/area management.
+- Continued shaping the logic so functions/events can reserve areas while individual bookings can still be assigned tables.
+
+### Settings and auto-assignment
+
+- Started reshaping the settings page toward the same breadcrumb-style format used on Booking Types.
+- Discussed and refined the auto-assignment direction:
+  - Avoid manager-heavy manual join-group setup.
+  - Prefer sensible defaults such as using the fewest suitable tables and adjacent tables when combining is required.
+  - Move away from visible assignment style toggles.
+  - Longer-term direction is a learning assignment system that adapts from manager corrections and historical behavior per venue/client.
+
+### Booking type colours
+
+- Centralised booking type colour handling in the frontend.
+- Booking type colour now feeds shared booking-type UI surfaces instead of each page hand-rolling its own colour logic.
+- Updated booking type colour usage across:
+  - Booking group identity styling.
+  - Calendar event/function tags.
+  - Dashboard booking type badges.
+  - Public booking service/session selectors.
+- Reverted booking/guest count pills back to neutral grey because those are metadata counts, not booking type identity.
+
+### Quality checks
+
+- Ran frontend production builds after the latest UI changes.
+- Build is passing.
+- The only remaining build note is the existing Vite large chunk warning.
+
+### Continue Tomorrow
+
+- Keep tightening venue/client data isolation.
+- Review the owner/admin client management flow end to end.
+- Continue auto-assignment design and implementation with a non-MVP approach.
+- Recheck booking type colour usage visually after trying a few different colours.
+- Continue testing event/function area reservation against table assignment behavior.

@@ -2,12 +2,16 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { ChevronLeft, ChevronRight, LogIn } from "lucide-react";
 import { Link } from "react-router";
 import { apiFetch, toJsonBody } from "../lib/api";
-import type { MetaPayload } from "../types";
+import { bookingTypeColourVars, bookingTypeSoftStyle } from "../lib/bookingTypeColours";
+import { publicVenuePath } from "../lib/publicVenue";
+import type { BookingCustomField, BookingSession, BookingType, MetaPayload } from "../types";
 import { FormMessage } from "../components/resrva/FormField";
 import "./PublicBooking.css";
 
 type BookingForm = {
-  service: "lunch" | "dinner" | "function" | "";
+  service: string;
+  booking_type_id: string;
+  booking_session_id: string;
   name: string;
   email: string;
   phone: string;
@@ -18,6 +22,7 @@ type BookingForm = {
   preferred_area_id: string;
   event_type: string;
   notes: string;
+  custom_answers: Record<string, string | boolean>;
   marketing_consent: boolean;
   terms_agreed: boolean;
 };
@@ -40,6 +45,8 @@ type Confirmation = {
 
 const initialForm: BookingForm = {
   service: "",
+  booking_type_id: "",
+  booking_session_id: "",
   name: "",
   email: "",
   phone: "",
@@ -50,15 +57,17 @@ const initialForm: BookingForm = {
   preferred_area_id: "",
   event_type: "",
   notes: "",
+  custom_answers: {},
   marketing_consent: true,
   terms_agreed: false,
 };
 
-const services = [
-  { label: "Lunch", value: "lunch", time: "12:00" },
-  { label: "Dinner", value: "dinner", time: "18:00" },
-  { label: "Function", value: "function", time: "18:00" },
-] as const;
+type ServiceOption = {
+  label: string;
+  value: string;
+  time: string;
+  bookingType?: BookingType;
+};
 
 type TimeOption = {
   value: string;
@@ -134,6 +143,11 @@ function buildTimeOptions(
     return [];
   }
 
+  const serviceType = meta?.booking_types?.find((type) => `booking-type:${type.id}` === service);
+  if (serviceType?.category === "event") {
+    return [];
+  }
+
   const dayOfWeek = dayOfWeekFromIso(date);
   const openingHours = meta?.opening_hours.find((hours) => Number(hours.day_of_week) === dayOfWeek);
   if (!openingHours || Number(openingHours.is_closed) === 1) {
@@ -143,10 +157,19 @@ function buildTimeOptions(
   const openMinutes = minutesFromTime(openingHours.opens_at);
   const closeMinutes = minutesFromTime(openingHours.closes_at);
   const interval = Math.max(Number(meta?.settings.slot_interval_minutes || 30), 15);
-  const duration = service === "function" ? 180 : Number(meta?.settings.default_duration_minutes || 120);
+  const duration = serviceType?.category === "function" ? 180 : Number(meta?.settings.default_duration_minutes || 120);
   const latestStart = closeMinutes - duration;
-  const serviceStart = service === "dinner" ? 17 * 60 : openMinutes;
-  const serviceEnd = service === "lunch" ? Math.min(17 * 60 - interval, latestStart) : latestStart;
+  const schedule = serviceType?.category === "dining" ? serviceType.schedule : null;
+  const serviceStart = schedule?.start_time
+    ? minutesFromTime(schedule.start_time)
+    : serviceType?.slug === "dinner"
+      ? 17 * 60
+      : openMinutes;
+  const serviceEnd = schedule?.end_time
+    ? minutesFromTime(schedule.end_time)
+    : serviceType?.slug === "lunch"
+      ? Math.min(17 * 60 - interval, latestStart)
+    : latestStart;
   const start = Math.max(openMinutes, serviceStart);
   const end = Math.min(latestStart, serviceEnd);
 
@@ -163,6 +186,76 @@ function buildTimeOptions(
   }
 
   return options;
+}
+
+function displaySession(session: BookingSession) {
+  const date = new Date(`${session.date}T00:00:00`);
+  const label = date.toLocaleDateString("en-AU", {
+    weekday: "long",
+    month: "short",
+    day: "numeric",
+  });
+  const start = displayTime(session.start_time.slice(0, 5));
+  const end = session.end_time ? displayTime(session.end_time.slice(0, 5)) : "";
+  const time = end ? `${start} - ${end}` : start;
+
+  return `${label} - ${time}`;
+}
+
+function sessionAvailabilityLabel(session: BookingSession) {
+  const labels: string[] = [];
+  if (session.available_guests !== null && session.available_guests !== undefined) {
+    labels.push(`${session.available_guests} guest spots left`);
+  }
+  if (session.available_bookings !== null && session.available_bookings !== undefined) {
+    labels.push(`${session.available_bookings} booking spots left`);
+  }
+
+  return labels.length ? labels.join(" · ") : "Available";
+}
+
+function EventSessionPanel({
+  bookingType,
+  selectedSessionId,
+  onSelectSession,
+}: {
+  bookingType: BookingType;
+  selectedSessionId: string;
+  onSelectSession: (session: BookingSession) => void;
+}) {
+  const sessions = bookingType.upcoming_sessions || [];
+
+  return (
+    <div className="public-booking-event-sessions" style={bookingTypeColourVars(bookingType.colour)}>
+      <div className="public-booking-event-sessions-heading">
+        <h2>{bookingType.name}</h2>
+        {bookingType.description ? <p>{bookingType.description}</p> : null}
+      </div>
+      {sessions.length ? (
+        <div className="public-booking-session-list">
+          {sessions.map((session) => (
+            <button
+              key={session.id}
+              type="button"
+              onClick={() => onSelectSession(session)}
+              className={[
+                "public-booking-session",
+                selectedSessionId === String(session.id) ? "is-selected" : "",
+              ].join(" ")}
+            >
+              <span>
+                <strong>{displaySession(session)}</strong>
+                {session.arrival_time ? <small>Arrive from {displayTime(session.arrival_time.slice(0, 5))}</small> : null}
+              </span>
+              <em>{sessionAvailabilityLabel(session)}</em>
+            </button>
+          ))}
+        </div>
+      ) : (
+        <p className="public-booking-empty">No upcoming sessions are available yet.</p>
+      )}
+    </div>
+  );
 }
 
 function buildCalendarDays(monthDate: Date): CalendarDay[] {
@@ -369,7 +462,33 @@ export default function PublicBooking() {
   }, []);
 
   const guestCount = Number(form.guest_count || 0);
+  const activeBookingTypes = useMemo(
+    () =>
+      (meta?.booking_types || []).filter(
+        (type) =>
+          ["dining", "function", "event"].includes(type.category) &&
+          Number(type.is_active) === 1 &&
+          Number(type.display_to_customers) === 1,
+      ),
+    [meta],
+  );
+  const services = useMemo<ServiceOption[]>(
+    () =>
+      activeBookingTypes.map((type) => ({
+        label: type.customer_button_label || type.name,
+        value: `booking-type:${type.id}`,
+        time: type.upcoming_sessions?.[0]?.start_time?.slice(0, 5) || type.schedule?.start_time?.slice(0, 5) || "12:00",
+        bookingType: type,
+      })),
+    [activeBookingTypes],
+  );
   const activeService = services.find((service) => service.value === form.service);
+  const selectedBookingType = activeService?.bookingType || null;
+  const selectedEventType = activeService?.bookingType?.category === "event" ? activeService.bookingType : null;
+  const selectedFunctionType = activeService?.bookingType?.category === "function" ? activeService.bookingType : null;
+  const selectedDiningType = activeService?.bookingType?.category === "dining" ? activeService.bookingType : null;
+  const selectedEventSession =
+    selectedEventType?.upcoming_sessions?.find((session) => String(session.id) === form.booking_session_id) || null;
   const venueName = meta?.settings.venue_name || "Old Canberra Inn";
   const venueImageUrl = meta?.settings.venue_image_url || "";
   const blockedOnlineDateSet = useMemo(
@@ -379,9 +498,15 @@ export default function PublicBooking() {
   const tableBookingsEnabled = (meta?.settings.online_table_bookings_enabled ?? "1") !== "0";
   const functionRequestsEnabled = (meta?.settings.online_function_requests_enabled ?? "1") !== "0";
   const serviceEnabled = useCallback(
-    (serviceValue: BookingForm["service"]) =>
-      serviceValue === "function" ? functionRequestsEnabled : tableBookingsEnabled,
-    [functionRequestsEnabled, tableBookingsEnabled],
+    (serviceValue: BookingForm["service"]) => {
+      const type = activeBookingTypes.find((bookingType) => `booking-type:${bookingType.id}` === serviceValue);
+      if (!type) return false;
+      if (type.category === "event") return true;
+      if (type.category === "function") return functionRequestsEnabled;
+      if (type.category === "dining") return tableBookingsEnabled;
+      return false;
+    },
+    [activeBookingTypes, functionRequestsEnabled, tableBookingsEnabled],
   );
   const timeOptions = useMemo(
     () => buildTimeOptions(form.service, form.date, meta),
@@ -402,22 +527,31 @@ export default function PublicBooking() {
   }, [form.service, form.time, timeOptions]);
 
   const policyMessage = useMemo(() => {
-    const min = Number(meta?.settings.min_table_guests || 8);
-    const max = Number(meta?.settings.max_table_guests || 29);
+    const min = selectedBookingType
+      ? Number(selectedBookingType.min_guests || 1)
+      : Number(meta?.settings.min_table_guests || 8);
+    const max = selectedBookingType
+      ? Number(selectedBookingType.max_guests || 0)
+      : Number(meta?.settings.max_table_guests || 29);
 
     if (form.service && !serviceEnabled(form.service)) {
-      return form.service === "function"
-        ? "Online function requests are currently turned off."
-        : "Online table bookings are currently turned off.";
+      if (selectedBookingType?.category === "function") return "Online function requests are currently turned off.";
+      if (selectedBookingType?.category === "event") return "This event booking type is not available online.";
+      return "Online table bookings are currently turned off.";
     }
     if (!guestCount) {
       return "Please choose the number of guests.";
     }
     if (guestCount < min) {
+      if (selectedBookingType) {
+        return `${selectedBookingType.name} starts at ${min} guests per booking.`;
+      }
       return `Online table bookings are for groups of ${min} or more. Smaller groups are welcome to walk in.`;
     }
-    if (form.service !== "function" && guestCount > max) {
-      return `Groups over ${max} guests should submit a function request.`;
+    if (max > 0 && guestCount > max) {
+      return selectedBookingType
+        ? `${selectedBookingType.name} accepts up to ${max} guests per booking.`
+        : `Groups over ${max} guests should submit a function request.`;
     }
     if (!form.date) {
       return "Please select a date.";
@@ -428,6 +562,12 @@ export default function PublicBooking() {
     if (!form.service) {
       return "Please choose a service.";
     }
+    if (selectedEventType && !form.booking_session_id) {
+      return "Please choose an event session.";
+    }
+    if (selectedEventType) {
+      return null;
+    }
     if (timeOptions.length === 0) {
       return "No online booking times are available for that service on this date.";
     }
@@ -436,9 +576,26 @@ export default function PublicBooking() {
     }
 
     return null;
-  }, [blockedOnlineDateSet, form.date, form.service, form.time, guestCount, meta, serviceEnabled, timeOptions.length]);
+  }, [
+    blockedOnlineDateSet,
+    form.booking_session_id,
+    form.date,
+    form.service,
+    form.time,
+    guestCount,
+    meta,
+    selectedBookingType,
+    selectedEventType,
+    serviceEnabled,
+    timeOptions.length,
+  ]);
 
-  const detailsComplete = Boolean(form.name.trim() && form.email && form.phone && form.terms_agreed);
+  const requiredCustomFieldsComplete = (selectedEventType?.custom_fields || []).every((field) => {
+    if (!Number(field.is_required)) return true;
+    const value = form.custom_answers[String(field.id)];
+    return field.field_type === "checkbox" ? Boolean(value) : String(value || "").trim() !== "";
+  });
+  const detailsComplete = Boolean(form.name.trim() && form.email && form.phone && form.terms_agreed && requiredCustomFieldsComplete);
 
   const updateField = (field: keyof BookingForm, value: string) => {
     setForm((current) => ({ ...current, [field]: value }));
@@ -449,6 +606,16 @@ export default function PublicBooking() {
     value: boolean,
   ) => {
     setForm((current) => ({ ...current, [field]: value }));
+  };
+
+  const updateCustomAnswer = (fieldId: number, value: string | boolean) => {
+    setForm((current) => ({
+      ...current,
+      custom_answers: {
+        ...current.custom_answers,
+        [String(fieldId)]: value,
+      },
+    }));
   };
 
   const fullName = form.name.trim();
@@ -464,30 +631,50 @@ export default function PublicBooking() {
     });
   };
 
-  const selectService = (service: (typeof services)[number]) => {
+  const selectEventSession = (session: BookingSession) => {
+    setForm((current) => ({
+      ...current,
+      booking_session_id: String(session.id),
+      date: session.date,
+      time: session.start_time.slice(0, 5),
+    }));
+  };
+
+  const selectService = (service: ServiceOption) => {
     if (!serviceEnabled(service.value as BookingForm["service"])) {
       setMessage({
         type: "info",
         text:
-          service.value === "function"
+          service.bookingType?.category === "function"
             ? "Online function requests are currently turned off."
-            : "Online table bookings are currently turned off.",
+            : service.bookingType?.category === "event"
+              ? "This event booking type is not available online."
+              : "Online table bookings are currently turned off.",
       });
       return;
     }
 
-    const nextTimeOptions = buildTimeOptions(service.value as BookingForm["service"], form.date, meta);
+    const bookingType = service.bookingType;
+    const isEventType = bookingType?.category === "event";
+    const isFunctionType = bookingType?.category === "function";
+    const firstSession = isEventType ? bookingType?.upcoming_sessions?.[0] : undefined;
+    const nextTimeOptions = buildTimeOptions(service.value, firstSession?.date || form.date, meta);
     const nextForm = {
       ...form,
-      service: service.value as BookingForm["service"],
-      time: nextTimeOptions[0]?.value || service.time,
-      event_type: service.value === "function" ? form.event_type || "Function" : "",
+      service: service.value,
+      booking_type_id: bookingType ? String(bookingType.id) : "",
+      booking_session_id: firstSession ? String(firstSession.id) : "",
+      date: firstSession?.date || form.date,
+      time: firstSession?.start_time?.slice(0, 5) || nextTimeOptions[0]?.value || service.time,
+      guest_count: bookingType ? String(Math.max(Number(form.guest_count || bookingType.min_guests), Number(bookingType.min_guests || 1))) : form.guest_count,
+      event_type: isFunctionType ? form.event_type || bookingType?.name || "Function" : bookingType?.name || "",
+      custom_answers: isEventType ? {} : form.custom_answers,
     };
     setForm(nextForm);
     setMessage(null);
 
-    const min = Number(meta?.settings.min_table_guests || 8);
-    const max = Number(meta?.settings.max_table_guests || 29);
+    const min = bookingType ? Number(bookingType.min_guests || 1) : Number(meta?.settings.min_table_guests || 8);
+    const max = bookingType ? Number(bookingType.max_guests || 0) : Number(meta?.settings.max_table_guests || 29);
     const nextGuestCount = Number(nextForm.guest_count || 0);
 
     if (!nextGuestCount) {
@@ -497,18 +684,15 @@ export default function PublicBooking() {
     if (nextGuestCount < min) {
       setMessage({
         type: "info",
-        text:
-          service.value === "function"
-            ? `Function requests must be for at least ${min} guests.`
-            : `Online table bookings are for groups of ${min} or more. Smaller groups are welcome to walk in.`,
+        text: bookingType
+          ? `${bookingType.name} starts at ${min} guests per booking.`
+          : `Online table bookings are for groups of ${min} or more. Smaller groups are welcome to walk in.`,
       });
       return;
     }
-    if (service.value !== "function" && nextGuestCount > max) {
-      setMessage({ type: "info", text: `Groups over ${max} guests should submit a function request.` });
-      return;
+    if (bookingType && max > 0 && nextGuestCount > max) {
+      setMessage({ type: "info", text: `${bookingType.name} accepts up to ${max} guests per booking.` });
     }
-
   };
 
   const goNext = () => {
@@ -543,19 +727,55 @@ export default function PublicBooking() {
     setMessage(null);
 
     try {
-      if (form.service === "function") {
+      if (selectedEventType) {
+        const response = await apiFetch<{
+          booking_reference: string;
+          status: string;
+          booking_type_name: string;
+        }>("public/event-bookings", {
+          method: "POST",
+          ...toJsonBody({
+            booking_type_id: Number(form.booking_type_id),
+            booking_session_id: Number(form.booking_session_id),
+            name: fullName,
+            email: form.email,
+            phone: form.phone,
+            guest_count: Number(form.guest_count),
+            notes: bookingNotes,
+            custom_answers: form.custom_answers,
+          }),
+        });
+
+        setConfirmation({
+          reference: response.booking_reference,
+          title: response.status === "waitlist" ? "Added to waitlist" : "Booking submitted",
+          body:
+            response.status === "waitlist"
+              ? "This session is full, so your booking has been added to the waitlist."
+              : "Your event booking has been received.",
+          service: response.booking_type_name,
+          date: selectedEventSession
+            ? displaySession(selectedEventSession)
+            : `${shortDate(form.date)} at ${displayTime(form.time)}`,
+          email: form.email,
+        });
+        return;
+      }
+
+      if (selectedFunctionType) {
         const response = await apiFetch<{
           booking_reference: string;
         }>("public/function-requests", {
           method: "POST",
           ...toJsonBody({
+            booking_type_id: Number(form.booking_type_id),
             name: fullName,
             email: form.email,
             phone: form.phone,
             event_date: form.date,
             start_time: form.time,
             guest_count: Number(form.guest_count),
-            event_type: form.event_type || "Function",
+            event_type: form.event_type || selectedFunctionType.name,
             duration_minutes: 180,
             preferred_area_id: form.preferred_area_id || null,
             notes: bookingNotes,
@@ -566,7 +786,7 @@ export default function PublicBooking() {
           reference: response.booking_reference,
           title: "Function request submitted",
           body: "A manager will review your request before confirmation.",
-          service: "Function",
+          service: selectedFunctionType.name,
           date: `${shortDate(form.date)} at ${displayTime(form.time)}`,
           email: form.email,
         });
@@ -575,6 +795,7 @@ export default function PublicBooking() {
 
       const response = await apiFetch<{
         booking_reference: string;
+        status: string;
         assigned_area: string;
       }>("public/table-bookings", {
         method: "POST",
@@ -585,6 +806,7 @@ export default function PublicBooking() {
           date: form.date,
           time: form.time,
           guest_count: Number(form.guest_count),
+          booking_type_id: selectedDiningType ? Number(form.booking_type_id) : null,
           preferred_area_id: form.preferred_area_id || null,
           notes: bookingNotes,
         }),
@@ -593,7 +815,10 @@ export default function PublicBooking() {
       setConfirmation({
         reference: response.booking_reference,
         title: "Booking submitted",
-        body: `Your booking has been confirmed in ${response.assigned_area}.`,
+        body:
+          response.status === "confirmed"
+            ? `Your booking has been confirmed in ${response.assigned_area}.`
+            : "Your booking has been received. A manager will assign your table before confirmation.",
         service: activeService?.label || form.time,
         date: `${shortDate(form.date)} at ${displayTime(form.time)}`,
         email: form.email,
@@ -606,6 +831,60 @@ export default function PublicBooking() {
     } finally {
       setSubmitting(false);
     }
+  };
+
+  const renderCustomField = (field: BookingCustomField) => {
+    const fieldId = String(field.id);
+    const value = form.custom_answers[fieldId];
+    const label = `${field.label}${Number(field.is_required) ? " *" : ""}`;
+
+    if (field.field_type === "checkbox") {
+      return (
+        <CheckboxField
+          key={field.id}
+          id={`custom-${field.id}`}
+          checked={Boolean(value)}
+          onChange={(checked) => updateCustomAnswer(field.id, checked)}
+        >
+          {field.label}
+          {Number(field.is_required) ? " *" : ""}
+        </CheckboxField>
+      );
+    }
+
+    if (field.field_type === "dropdown") {
+      return (
+        <DetailsField key={field.id} id={`custom-${field.id}`} label={label}>
+          <select
+            id={`custom-${field.id}`}
+            className="public-booking-line-input"
+            required={Boolean(Number(field.is_required))}
+            value={String(value || "")}
+            onChange={(event) => updateCustomAnswer(field.id, event.target.value)}
+          >
+            <option value="">Select</option>
+            {(field.options || []).map((option) => (
+              <option key={option} value={option}>
+                {option}
+              </option>
+            ))}
+          </select>
+        </DetailsField>
+      );
+    }
+
+    return (
+      <DetailsField key={field.id} id={`custom-${field.id}`} label={label}>
+        <input
+          id={`custom-${field.id}`}
+          type={field.field_type === "number" ? "number" : "text"}
+          className="public-booking-line-input"
+          required={Boolean(Number(field.is_required))}
+          value={String(value || "")}
+          onChange={(event) => updateCustomAnswer(field.id, event.target.value)}
+        />
+      </DetailsField>
+    );
   };
 
   return (
@@ -659,13 +938,21 @@ export default function PublicBooking() {
           <section className="public-booking-content">
         {step === 1 ? (
           <div className="public-booking-layout">
-            <CalendarPanel
-              selectedDate={form.date}
-              visibleMonth={visibleMonth}
-              blockedDates={blockedOnlineDateSet}
-              onMonthChange={setVisibleMonth}
-              onSelectDate={(date) => updateField("date", date)}
-            />
+            {selectedEventType ? (
+              <EventSessionPanel
+                bookingType={selectedEventType}
+                selectedSessionId={form.booking_session_id}
+                onSelectSession={selectEventSession}
+              />
+            ) : (
+              <CalendarPanel
+                selectedDate={form.date}
+                visibleMonth={visibleMonth}
+                blockedDates={blockedOnlineDateSet}
+                onMonthChange={setVisibleMonth}
+                onSelectDate={(date) => updateField("date", date)}
+              />
+            )}
 
             <div className="public-booking-side">
               <Card>
@@ -708,13 +995,14 @@ export default function PublicBooking() {
                 <div className="public-booking-services">
                   {services.map((service) => (
                     <button
-                      key={service.label}
+                      key={service.value}
                       type="button"
                       disabled={!serviceEnabled(service.value as BookingForm["service"])}
                       onClick={() => selectService(service)}
+                      style={bookingTypeColourVars(service.bookingType?.colour)}
                       className={[
                         "public-booking-service",
-                        activeService?.label === service.label ? "is-selected" : "",
+                        activeService?.value === service.value ? "is-selected" : "",
                         !serviceEnabled(service.value as BookingForm["service"]) ? "is-disabled" : "",
                       ].join(" ")}
                     >
@@ -726,24 +1014,35 @@ export default function PublicBooking() {
 
               <Card className="public-booking-time-card">
                 <div className="public-booking-time-heading">
-                  <h2 className="public-booking-card-title">Select a time</h2>
-                  <span>{activeService?.label || "Choose a service first"}</span>
+                  <h2 className="public-booking-card-title">{selectedEventType ? "Selected session" : "Select a time"}</h2>
+                  <span style={activeService?.bookingType ? bookingTypeSoftStyle(activeService.bookingType.colour) : undefined}>
+                    {activeService?.label || "Choose a service first"}
+                  </span>
                 </div>
-                <select
-                  aria-label="Booking time"
-                  value={selectedTimeValue}
-                  disabled={!form.service || timeOptions.length === 0}
-                  onChange={(event) => updateField("time", event.target.value)}
-                  className="public-booking-time-select"
-                >
-                  {!form.service ? <option value="">Choose a service first</option> : null}
-                  {form.service && timeOptions.length === 0 ? <option value="">No times available</option> : null}
-                  {timeOptions.map((option) => (
-                    <option key={option.value} value={option.value}>
-                      {option.label}
-                    </option>
-                  ))}
-                </select>
+                {selectedEventType ? (
+                  <div
+                    className="public-booking-selected-session"
+                    style={bookingTypeSoftStyle(selectedEventType.colour)}
+                  >
+                    {selectedEventSession ? displaySession(selectedEventSession) : "Choose a session"}
+                  </div>
+                ) : (
+                  <select
+                    aria-label="Booking time"
+                    value={selectedTimeValue}
+                    disabled={!form.service || timeOptions.length === 0}
+                    onChange={(event) => updateField("time", event.target.value)}
+                    className="public-booking-time-select"
+                  >
+                    {!form.service ? <option value="">Choose a service first</option> : null}
+                    {form.service && timeOptions.length === 0 ? <option value="">No times available</option> : null}
+                    {timeOptions.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                )}
               </Card>
 
               {message ? <FormMessage type={message.type}>{message.text}</FormMessage> : null}
@@ -802,7 +1101,7 @@ export default function PublicBooking() {
                     onChange={(event) => updateField("company_name", event.target.value)}
                   />
                 </DetailsField>
-                {form.service === "function" ? (
+                {selectedFunctionType ? (
                   <DetailsField id="event_type" label="Function type">
                     <input
                       id="event_type"
@@ -813,6 +1112,7 @@ export default function PublicBooking() {
                     />
                   </DetailsField>
                 ) : null}
+                {selectedEventType?.custom_fields.map(renderCustomField)}
               </div>
             </Card>
 
@@ -840,7 +1140,7 @@ export default function PublicBooking() {
                   onChange={(checked) => updateBoolean("terms_agreed", checked)}
                 >
                   I agree to the booking{" "}
-                  <Link to="/terms" target="_blank" rel="noreferrer" onClick={(event) => event.stopPropagation()}>
+                  <Link to={publicVenuePath("terms")} target="_blank" rel="noreferrer" onClick={(event) => event.stopPropagation()}>
                     Terms and Conditions
                   </Link>
                 </CheckboxField>
@@ -874,24 +1174,43 @@ export default function PublicBooking() {
                 </p>
                 <p className="public-booking-summary-row">
                   <span className="public-booking-summary-label">Time</span>
-                  <span>{displayTime(form.time)}</span>
+                  <span>{selectedEventSession ? displayTime(selectedEventSession.start_time.slice(0, 5)) : displayTime(form.time)}</span>
                 </p>
                 <p className="public-booking-summary-row">
                   <span className="public-booking-summary-label">Service</span>
                   <span>{activeService?.label || form.time}</span>
                 </p>
-                <p className="public-booking-summary-row">
-                  <span className="public-booking-summary-label">
-                    {form.service === "function" ? "Area request" : "Area preference"}
-                  </span>
-                  <span>{selectedAreaName}</span>
-                </p>
-                {form.service === "function" ? (
+                {!selectedEventType ? (
+                  <p className="public-booking-summary-row">
+                    <span className="public-booking-summary-label">
+                      {selectedFunctionType ? "Area request" : "Area preference"}
+                    </span>
+                    <span>{selectedAreaName}</span>
+                  </p>
+                ) : null}
+                {selectedEventSession ? (
+                  <p className="public-booking-summary-row">
+                    <span className="public-booking-summary-label">Session</span>
+                    <span>{displaySession(selectedEventSession)}</span>
+                  </p>
+                ) : null}
+                {selectedFunctionType ? (
                   <p className="public-booking-summary-row">
                     <span className="public-booking-summary-label">Function type</span>
                     <span>{form.event_type}</span>
                   </p>
                 ) : null}
+                {selectedEventType?.custom_fields.map((field) => {
+                  const answer = form.custom_answers[String(field.id)];
+                  if (answer === undefined || answer === "") return null;
+
+                  return (
+                    <p key={field.id} className="public-booking-summary-row">
+                      <span className="public-booking-summary-label">{field.label}</span>
+                      <span>{typeof answer === "boolean" ? (answer ? "Yes" : "No") : answer}</span>
+                    </p>
+                  );
+                })}
                 <p className="public-booking-summary-row">
                   <span className="public-booking-summary-label">Name</span>
                   <span>{fullName}</span>

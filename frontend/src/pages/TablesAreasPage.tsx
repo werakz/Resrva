@@ -17,13 +17,25 @@ type TableForm = {
   table_number: string;
   capacity: string;
   active: string;
+  auto_assign_enabled: string;
+  joinable: string;
+  assignment_priority: string;
+  preferred_min_guests: string;
+  preferred_max_guests: string;
+  keep_for_walkins: string;
+  accessibility_friendly: string;
 };
 
 type AreaForm = {
   name: string;
   code: string;
-  function_enabled: string;
   sort_order: string;
+  auto_assign_enabled: string;
+  allow_table_joins: string;
+  max_joined_tables: string;
+  assignment_priority: string;
+  preferred_min_guests: string;
+  preferred_max_guests: string;
 };
 
 const emptyTableForm: TableForm = {
@@ -31,17 +43,37 @@ const emptyTableForm: TableForm = {
   table_number: "",
   capacity: "8",
   active: "1",
+  auto_assign_enabled: "1",
+  joinable: "1",
+  assignment_priority: "0",
+  preferred_min_guests: "",
+  preferred_max_guests: "",
+  keep_for_walkins: "0",
+  accessibility_friendly: "0",
 };
 
 const emptyAreaForm: AreaForm = {
   name: "",
   code: "",
-  function_enabled: "0",
   sort_order: "0",
+  auto_assign_enabled: "1",
+  allow_table_joins: "1",
+  max_joined_tables: "4",
+  assignment_priority: "0",
+  preferred_min_guests: "",
+  preferred_max_guests: "",
 };
 
 function isActive(value: number | boolean): boolean {
   return Boolean(Number(value));
+}
+
+function optionalNumber(value: string): number | null {
+  return value.trim() === "" ? null : Number(value);
+}
+
+function optionalString(value?: number | null): string {
+  return value === null || value === undefined ? "" : String(value);
 }
 
 function codeFromName(name: string): string {
@@ -63,6 +95,7 @@ export default function TablesAreasPage() {
   const [newAreaForm, setNewAreaForm] = useState<AreaForm>(emptyAreaForm);
   const [isTableModalOpen, setTableModalOpen] = useState(false);
   const [isAreaModalOpen, setAreaModalOpen] = useState(false);
+  const [deleteConfirm, setDeleteConfirm] = useState<"table" | "area" | null>(null);
   const [message, setMessage] = useState<{ type: "error" | "success"; text: string } | null>(null);
 
   const activeAreas = useMemo(() => (data?.areas || []).filter((area) => isActive(area.active)), [data]);
@@ -76,10 +109,9 @@ export default function TablesAreasPage() {
     { value: "0", label: "Not reservable" },
   ];
   const yesNoOptions = [
-    { value: "0", label: "No" },
     { value: "1", label: "Yes" },
+    { value: "0", label: "No" },
   ];
-
   const loadTables = async () => {
     const payload = await apiFetch<TablesPayload>("tables");
     setData(payload);
@@ -117,6 +149,13 @@ export default function TablesAreasPage() {
       table_number: String(selectedTable.table_number),
       capacity: String(selectedTable.capacity),
       active: String(Number(selectedTable.active)),
+      auto_assign_enabled: String(Number(selectedTable.auto_assign_enabled ?? 1)),
+      joinable: String(Number(selectedTable.joinable ?? 1)),
+      assignment_priority: String(selectedTable.assignment_priority ?? 0),
+      preferred_min_guests: optionalString(selectedTable.preferred_min_guests),
+      preferred_max_guests: optionalString(selectedTable.preferred_max_guests),
+      keep_for_walkins: String(Number(selectedTable.keep_for_walkins ?? 0)),
+      accessibility_friendly: String(Number(selectedTable.accessibility_friendly ?? 0)),
     });
   }, [selectedTable]);
 
@@ -125,8 +164,14 @@ export default function TablesAreasPage() {
     setAreaForm({
       name: selectedArea.name,
       code: selectedArea.code,
-      function_enabled: String(Number(selectedArea.function_enabled)),
       sort_order: String(selectedArea.sort_order ?? 0),
+      auto_assign_enabled: String(Number(selectedArea.auto_assign_enabled ?? 1)),
+      allow_table_joins: String(Number(selectedArea.allow_table_joins ?? 1)),
+      max_joined_tables:
+        selectedArea.max_joined_tables === undefined ? "4" : optionalString(selectedArea.max_joined_tables),
+      assignment_priority: String(selectedArea.assignment_priority ?? 0),
+      preferred_min_guests: optionalString(selectedArea.preferred_min_guests),
+      preferred_max_guests: optionalString(selectedArea.preferred_max_guests),
     });
   }, [selectedArea]);
 
@@ -167,6 +212,13 @@ export default function TablesAreasPage() {
       table_number: Number(tableForm.table_number),
       capacity: Number(tableForm.capacity),
       active: tableForm.active === "1",
+      auto_assign_enabled: tableForm.auto_assign_enabled === "1",
+      joinable: tableForm.joinable === "1",
+      assignment_priority: Number(tableForm.assignment_priority || 0),
+      preferred_min_guests: optionalNumber(tableForm.preferred_min_guests),
+      preferred_max_guests: optionalNumber(tableForm.preferred_max_guests),
+      keep_for_walkins: tableForm.keep_for_walkins === "1",
+      accessibility_friendly: tableForm.accessibility_friendly === "1",
     };
 
     try {
@@ -192,6 +244,13 @@ export default function TablesAreasPage() {
       table_number: Number(newTableForm.table_number),
       capacity: Number(newTableForm.capacity),
       active: newTableForm.active === "1",
+      auto_assign_enabled: newTableForm.auto_assign_enabled === "1",
+      joinable: newTableForm.joinable === "1",
+      assignment_priority: Number(newTableForm.assignment_priority || 0),
+      preferred_min_guests: optionalNumber(newTableForm.preferred_min_guests),
+      preferred_max_guests: optionalNumber(newTableForm.preferred_max_guests),
+      keep_for_walkins: newTableForm.keep_for_walkins === "1",
+      accessibility_friendly: newTableForm.accessibility_friendly === "1",
     };
 
     try {
@@ -210,12 +269,11 @@ export default function TablesAreasPage() {
 
   const deleteTable = async () => {
     if (!selectedTable) return;
-    const confirmed = window.confirm(`Delete table ${selectedTable.table_number}? Existing booking history is protected.`);
-    if (!confirmed) return;
 
     try {
       await apiFetch<{ ok: boolean }>(`tables/${selectedTable.id}`, { method: "DELETE" });
       setMessage({ type: "success", text: `Table ${selectedTable.table_number} deleted.` });
+      setDeleteConfirm(null);
       setSelectedTableId("");
       setTableForm(emptyTableForm);
       await loadTables();
@@ -234,8 +292,14 @@ export default function TablesAreasPage() {
     const payload = {
       name: areaForm.name.trim(),
       code: areaForm.code.trim() || codeFromName(areaForm.name),
-      function_enabled: areaForm.function_enabled === "1",
+      function_enabled: isActive(selectedArea.function_enabled),
       sort_order: Number(areaForm.sort_order || 0),
+      auto_assign_enabled: areaForm.auto_assign_enabled === "1",
+      allow_table_joins: areaForm.allow_table_joins === "1",
+      max_joined_tables: optionalNumber(areaForm.max_joined_tables),
+      assignment_priority: Number(areaForm.assignment_priority || 0),
+      preferred_min_guests: optionalNumber(areaForm.preferred_min_guests),
+      preferred_max_guests: optionalNumber(areaForm.preferred_max_guests),
     };
 
     try {
@@ -259,8 +323,14 @@ export default function TablesAreasPage() {
     const payload = {
       name: newAreaForm.name.trim(),
       code: newAreaForm.code.trim() || codeFromName(newAreaForm.name),
-      function_enabled: newAreaForm.function_enabled === "1",
+      function_enabled: false,
       sort_order: Number(newAreaForm.sort_order || 0),
+      auto_assign_enabled: newAreaForm.auto_assign_enabled === "1",
+      allow_table_joins: newAreaForm.allow_table_joins === "1",
+      max_joined_tables: optionalNumber(newAreaForm.max_joined_tables),
+      assignment_priority: Number(newAreaForm.assignment_priority || 0),
+      preferred_min_guests: optionalNumber(newAreaForm.preferred_min_guests),
+      preferred_max_guests: optionalNumber(newAreaForm.preferred_max_guests),
     };
 
     try {
@@ -279,12 +349,11 @@ export default function TablesAreasPage() {
 
   const deleteArea = async () => {
     if (!selectedArea) return;
-    const confirmed = window.confirm(`Remove ${selectedArea.name}? Move or delete its tables first.`);
-    if (!confirmed) return;
 
     try {
       await apiFetch<{ ok: boolean }>(`areas/${selectedArea.id}`, { method: "DELETE" });
       setMessage({ type: "success", text: `${selectedArea.name} removed.` });
+      setDeleteConfirm(null);
       setSelectedAreaId("");
       setAreaForm(emptyAreaForm);
       await loadTables();
@@ -382,12 +451,6 @@ export default function TablesAreasPage() {
                     <Plus className="size-4" />
                   </button>
                 </div>
-
-                {isActive(area.function_enabled) ? (
-                  <span className="mt-4 inline-flex rounded-full bg-blue-light-50 px-2 py-1 text-xs font-medium text-blue-light-500">
-                    Function
-                  </span>
-                ) : null}
               </section>
             );
           })}
@@ -446,12 +509,84 @@ export default function TablesAreasPage() {
                     options={reservableOptions}
                   />
                 </div>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div>
+                    <FieldLabel htmlFor="table-auto-assign">Auto assignment</FieldLabel>
+                    <SelectInput
+                      id="table-auto-assign"
+                      value={tableForm.auto_assign_enabled}
+                      onChange={(value) => setTableForm((current) => ({ ...current, auto_assign_enabled: value }))}
+                      options={yesNoOptions}
+                    />
+                  </div>
+                  <div>
+                    <FieldLabel htmlFor="table-joinable">Can join adjacent tables</FieldLabel>
+                    <SelectInput
+                      id="table-joinable"
+                      value={tableForm.joinable}
+                      onChange={(value) => setTableForm((current) => ({ ...current, joinable: value }))}
+                      options={yesNoOptions}
+                    />
+                  </div>
+                  <div>
+                    <FieldLabel htmlFor="table-walkins">Keep for walk-ins</FieldLabel>
+                    <SelectInput
+                      id="table-walkins"
+                      value={tableForm.keep_for_walkins}
+                      onChange={(value) => setTableForm((current) => ({ ...current, keep_for_walkins: value }))}
+                      options={yesNoOptions}
+                    />
+                  </div>
+                  <div>
+                    <FieldLabel htmlFor="table-accessibility">Accessibility friendly</FieldLabel>
+                    <SelectInput
+                      id="table-accessibility"
+                      value={tableForm.accessibility_friendly}
+                      onChange={(value) => setTableForm((current) => ({ ...current, accessibility_friendly: value }))}
+                      options={yesNoOptions}
+                    />
+                  </div>
+                  <div>
+                    <FieldLabel htmlFor="table-priority">Priority (lower first)</FieldLabel>
+                    <input
+                      id="table-priority"
+                      type="number"
+                      className={inputClass}
+                      value={tableForm.assignment_priority}
+                      onChange={(event) => setTableForm((current) => ({ ...current, assignment_priority: event.target.value }))}
+                    />
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <FieldLabel htmlFor="table-min-guests">Preferred min</FieldLabel>
+                      <input
+                        id="table-min-guests"
+                        type="number"
+                        min="1"
+                        className={inputClass}
+                        value={tableForm.preferred_min_guests}
+                        onChange={(event) => setTableForm((current) => ({ ...current, preferred_min_guests: event.target.value }))}
+                      />
+                    </div>
+                    <div>
+                      <FieldLabel htmlFor="table-max-guests">Preferred max</FieldLabel>
+                      <input
+                        id="table-max-guests"
+                        type="number"
+                        min="1"
+                        className={inputClass}
+                        value={tableForm.preferred_max_guests}
+                        onChange={(event) => setTableForm((current) => ({ ...current, preferred_max_guests: event.target.value }))}
+                      />
+                    </div>
+                  </div>
+                </div>
                 <div className="flex flex-wrap gap-2">
                   <button type="button" onClick={saveTable} className="inline-flex h-11 items-center gap-2 rounded-lg bg-brand-600 px-4 text-sm font-medium text-white hover:bg-brand-700">
                     <Save className="size-4" />
                     Save table
                   </button>
-                  <button type="button" onClick={deleteTable} className="inline-flex h-11 items-center gap-2 rounded-lg border border-error-200 bg-error-50 px-4 text-sm font-medium text-error-700 hover:bg-error-100">
+                  <button type="button" onClick={() => setDeleteConfirm("table")} className="inline-flex h-11 items-center gap-2 rounded-lg border border-error-200 bg-error-50 px-4 text-sm font-medium text-error-700 hover:bg-error-100">
                     <Trash2 className="size-4" />
                     Delete
                   </button>
@@ -504,24 +639,76 @@ export default function TablesAreasPage() {
                       />
                     </div>
                   </div>
+                  <div>
+                    <FieldLabel htmlFor="sort-order">Order</FieldLabel>
+                    <input
+                      id="sort-order"
+                      type="number"
+                      className={inputClass}
+                      value={areaForm.sort_order}
+                      onChange={(event) => setAreaForm((current) => ({ ...current, sort_order: event.target.value }))}
+                    />
+                  </div>
                   <div className="grid gap-3 sm:grid-cols-2">
                     <div>
-                      <FieldLabel htmlFor="function-enabled">Function area</FieldLabel>
+                      <FieldLabel htmlFor="area-auto-assign">Auto assignment</FieldLabel>
                       <SelectInput
-                        id="function-enabled"
-                        value={areaForm.function_enabled}
-                        onChange={(value) => setAreaForm((current) => ({ ...current, function_enabled: value }))}
+                        id="area-auto-assign"
+                        value={areaForm.auto_assign_enabled}
+                        onChange={(value) => setAreaForm((current) => ({ ...current, auto_assign_enabled: value }))}
                         options={yesNoOptions}
                       />
                     </div>
                     <div>
-                      <FieldLabel htmlFor="sort-order">Order</FieldLabel>
+                      <FieldLabel htmlFor="area-table-joins">Adjacent table joining</FieldLabel>
+                      <SelectInput
+                        id="area-table-joins"
+                        value={areaForm.allow_table_joins}
+                        onChange={(value) => setAreaForm((current) => ({ ...current, allow_table_joins: value }))}
+                        options={yesNoOptions}
+                      />
+                    </div>
+                    <div>
+                      <FieldLabel htmlFor="area-max-joined">Max adjacent tables</FieldLabel>
                       <input
-                        id="sort-order"
+                        id="area-max-joined"
+                        type="number"
+                        min="1"
+                        className={inputClass}
+                        value={areaForm.max_joined_tables}
+                        onChange={(event) => setAreaForm((current) => ({ ...current, max_joined_tables: event.target.value }))}
+                      />
+                    </div>
+                    <div>
+                      <FieldLabel htmlFor="area-priority">Priority (lower first)</FieldLabel>
+                      <input
+                        id="area-priority"
                         type="number"
                         className={inputClass}
-                        value={areaForm.sort_order}
-                        onChange={(event) => setAreaForm((current) => ({ ...current, sort_order: event.target.value }))}
+                        value={areaForm.assignment_priority}
+                        onChange={(event) => setAreaForm((current) => ({ ...current, assignment_priority: event.target.value }))}
+                      />
+                    </div>
+                    <div>
+                      <FieldLabel htmlFor="area-min-guests">Preferred min guests</FieldLabel>
+                      <input
+                        id="area-min-guests"
+                        type="number"
+                        min="1"
+                        className={inputClass}
+                        value={areaForm.preferred_min_guests}
+                        onChange={(event) => setAreaForm((current) => ({ ...current, preferred_min_guests: event.target.value }))}
+                      />
+                    </div>
+                    <div>
+                      <FieldLabel htmlFor="area-max-guests">Preferred max guests</FieldLabel>
+                      <input
+                        id="area-max-guests"
+                        type="number"
+                        min="1"
+                        className={inputClass}
+                        value={areaForm.preferred_max_guests}
+                        onChange={(event) => setAreaForm((current) => ({ ...current, preferred_max_guests: event.target.value }))}
                       />
                     </div>
                   </div>
@@ -530,7 +717,7 @@ export default function TablesAreasPage() {
                       <Save className="size-4" />
                       Save section
                     </button>
-                    <button type="button" onClick={deleteArea} className="inline-flex h-11 items-center gap-2 rounded-lg border border-error-200 bg-error-50 px-4 text-sm font-medium text-error-700 hover:bg-error-100">
+                    <button type="button" onClick={() => setDeleteConfirm("area")} className="inline-flex h-11 items-center gap-2 rounded-lg border border-error-200 bg-error-50 px-4 text-sm font-medium text-error-700 hover:bg-error-100">
                       <Trash2 className="size-4" />
                       Remove
                     </button>
@@ -543,8 +730,46 @@ export default function TablesAreasPage() {
               )}
             </div>
           </section>
+
         </aside>
       </div>
+
+      <Modal isOpen={deleteConfirm !== null} onClose={() => setDeleteConfirm(null)} className="m-4 max-w-[460px]" showCloseButton={false}>
+        <div className="p-5 sm:p-6">
+          <div className="flex items-start gap-3">
+            <span className="flex size-10 shrink-0 items-center justify-center rounded-full bg-error-50 text-error-600">
+              <Trash2 className="size-5" />
+            </span>
+            <div>
+              <h2 className="text-lg font-semibold text-gray-900">
+                {deleteConfirm === "table" ? "Delete table?" : "Remove section?"}
+              </h2>
+              <p className="mt-2 text-sm leading-6 text-gray-600">
+                {deleteConfirm === "table"
+                  ? `Table ${selectedTable?.table_number ?? ""} will be removed. Existing booking history is protected.`
+                  : `${selectedArea?.name ?? "This section"} will be removed. Move or delete its tables first.`}
+              </p>
+            </div>
+          </div>
+          <div className="mt-5 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+            <button
+              type="button"
+              onClick={() => setDeleteConfirm(null)}
+              className="inline-flex h-10 items-center justify-center rounded-lg border border-gray-300 px-4 text-sm font-medium text-gray-700 hover:bg-gray-50"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={deleteConfirm === "table" ? deleteTable : deleteArea}
+              className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-error-600 px-4 text-sm font-medium text-white hover:bg-error-700"
+            >
+              <Trash2 className="size-4" />
+              {deleteConfirm === "table" ? "Delete" : "Remove"}
+            </button>
+          </div>
+        </div>
+      </Modal>
 
       <Modal isOpen={isTableModalOpen} onClose={() => setTableModalOpen(false)} className="m-4 max-w-[560px]">
         <div className="p-5 sm:p-6">
@@ -638,26 +863,15 @@ export default function TablesAreasPage() {
                 />
               </div>
             </div>
-            <div className="grid gap-3 sm:grid-cols-2">
-              <div>
-                <FieldLabel htmlFor="new-function-enabled">Function area</FieldLabel>
-                <SelectInput
-                  id="new-function-enabled"
-                  value={newAreaForm.function_enabled}
-                  onChange={(value) => setNewAreaForm((current) => ({ ...current, function_enabled: value }))}
-                  options={yesNoOptions}
-                />
-              </div>
-              <div>
-                <FieldLabel htmlFor="new-sort-order">Order</FieldLabel>
-                <input
-                  id="new-sort-order"
-                  type="number"
-                  className={inputClass}
-                  value={newAreaForm.sort_order}
-                  onChange={(event) => setNewAreaForm((current) => ({ ...current, sort_order: event.target.value }))}
-                />
-              </div>
+            <div>
+              <FieldLabel htmlFor="new-sort-order">Order</FieldLabel>
+              <input
+                id="new-sort-order"
+                type="number"
+                className={inputClass}
+                value={newAreaForm.sort_order}
+                onChange={(event) => setNewAreaForm((current) => ({ ...current, sort_order: event.target.value }))}
+              />
             </div>
             <div className="flex flex-wrap justify-end gap-2 pt-2">
               <button type="button" onClick={() => setAreaModalOpen(false)} className="h-11 rounded-lg border border-gray-300 bg-white px-4 text-sm font-medium text-gray-700 hover:bg-gray-50">

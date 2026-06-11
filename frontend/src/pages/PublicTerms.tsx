@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { ArrowLeft } from "lucide-react";
 import { Link } from "react-router";
 import { apiFetch } from "../lib/api";
+import { publicVenuePath } from "../lib/publicVenue";
 import type { MetaPayload } from "../types";
 import { FormMessage } from "../components/resrva/FormField";
 import { LoadingState } from "../components/resrva/LoadingState";
@@ -51,7 +52,7 @@ export default function PublicTerms() {
   return (
     <main className="min-h-screen bg-gray-50 px-4 py-8 text-gray-900">
       <div className="mx-auto max-w-3xl">
-        <Link to="/" className="mb-5 inline-flex items-center gap-2 text-sm font-medium text-brand-700 hover:text-brand-800">
+        <Link to={publicVenuePath()} className="mb-5 inline-flex items-center gap-2 text-sm font-medium text-brand-700 hover:text-brand-800">
           <ArrowLeft className="size-4" />
           Back to booking
         </Link>

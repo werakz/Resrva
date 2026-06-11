@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { Link, useNavigate } from "react-router";
 import { useSidebar } from "../context/SidebarContext";
-import { ChevronDown, LogOut, Search, UserRound } from "lucide-react";
+import { Building2, Check, ChevronDown, LogOut, Search, UserRound } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
 import { Dropdown } from "../components/ui/dropdown/Dropdown";
 import { DropdownItem } from "../components/ui/dropdown/DropdownItem";
@@ -10,8 +10,9 @@ import { DropdownItem } from "../components/ui/dropdown/DropdownItem";
 const AppHeader: React.FC = () => {
   const [isApplicationMenuOpen, setApplicationMenuOpen] = useState(false);
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
+  const [isVenueMenuOpen, setIsVenueMenuOpen] = useState(false);
   const [globalSearch, setGlobalSearch] = useState("");
-  const { user, logout } = useAuth();
+  const { user, venues, currentVenue, supportMode, logout, switchVenue, stopSupport } = useAuth();
   const navigate = useNavigate();
   const { isMobileOpen, toggleSidebar, toggleMobileSidebar } = useSidebar();
 
@@ -41,6 +42,24 @@ const AppHeader: React.FC = () => {
       .slice(0, 2)
       .map((part) => part[0]?.toUpperCase())
       .join("") || "M";
+
+  const handleVenueSwitch = async (venueId: number) => {
+    if (currentVenue?.id === venueId) {
+      setIsVenueMenuOpen(false);
+      return;
+    }
+
+    await switchVenue(venueId);
+    setIsVenueMenuOpen(false);
+    window.location.reload();
+  };
+
+  const isPlatformAdmin = user?.is_platform_admin === true || user?.is_platform_admin === 1;
+
+  const handleStopSupport = async () => {
+    await stopSupport();
+    navigate("/app/resrva-admin/clients");
+  };
 
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -127,7 +146,7 @@ const AppHeader: React.FC = () => {
             </svg>
           </button>
 
-          <div className="hidden lg:block">
+          <div className={`hidden ${isPlatformAdmin && !supportMode ? "" : "lg:block"}`}>
             <form onSubmit={submitGlobalSearch}>
               <div className="relative">
                 <Search className="absolute left-4 top-1/2 size-5 -translate-y-1/2 text-gray-500" />
@@ -158,9 +177,61 @@ const AppHeader: React.FC = () => {
           } items-center justify-between w-full gap-4 px-5 py-4 lg:flex shadow-theme-md lg:justify-end lg:px-0 lg:shadow-none`}
         >
           <div className="flex items-center gap-2 2xsm:gap-3">
-            <Link to="/" className="text-sm font-medium text-gray-600 hover:text-brand-700">
-              Public form
-            </Link>
+            {supportMode && currentVenue ? (
+              <div className="hidden items-center gap-2 rounded-lg border border-warning-200 bg-warning-50 px-3 py-2 text-sm font-medium text-warning-800 lg:flex">
+                <span className="max-w-[260px] truncate">
+                  Support: {currentVenue.account_name ? `${currentVenue.account_name} / ` : ""}{currentVenue.name}
+                </span>
+                <button type="button" onClick={handleStopSupport} className="text-warning-900 underline-offset-2 hover:underline">
+                  Exit
+                </button>
+              </div>
+            ) : null}
+            {currentVenue ? (
+              <div className="relative">
+                <button
+                  type="button"
+                  onClick={() => venues.length > 1 && setIsVenueMenuOpen((current) => !current)}
+                  className="dropdown-toggle inline-flex h-10 max-w-[220px] items-center gap-2 rounded-lg border border-gray-200 bg-white px-3 text-sm font-medium text-gray-700 shadow-theme-xs hover:bg-gray-50 dark:border-gray-800 dark:bg-white/[0.03] dark:text-gray-300 dark:hover:bg-white/[0.06]"
+                  aria-label="Switch venue"
+                >
+                  <Building2 className="size-4 shrink-0 text-gray-500" />
+                  <span className="truncate">{currentVenue.name}</span>
+                  {venues.length > 1 ? (
+                    <ChevronDown className={`size-4 shrink-0 text-gray-500 transition ${isVenueMenuOpen ? "rotate-180" : ""}`} />
+                  ) : null}
+                </button>
+
+                {venues.length > 1 ? (
+                  <Dropdown
+                    isOpen={isVenueMenuOpen}
+                    onClose={() => setIsVenueMenuOpen(false)}
+                    className="right-0 mt-2 w-[260px] p-2"
+                  >
+                    <div className="px-2 pb-2 text-xs font-medium uppercase text-gray-400">Venues</div>
+                    <div className="flex flex-col gap-1">
+                      {venues.map((venue) => (
+                        <DropdownItem
+                          key={venue.id}
+                          onItemClick={() => {
+                            void handleVenueSwitch(venue.id);
+                          }}
+                          className="flex items-center justify-between rounded-lg px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-white/5"
+                        >
+                          <span className="truncate">{venue.name}</span>
+                          {currentVenue.id === venue.id ? <Check className="size-4 text-brand-600" /> : null}
+                        </DropdownItem>
+                      ))}
+                    </div>
+                  </Dropdown>
+                ) : null}
+              </div>
+            ) : null}
+            {currentVenue ? (
+              <Link to={currentVenue.slug ? `/${currentVenue.slug}` : "/"} className="text-sm font-medium text-gray-600 hover:text-brand-700">
+                Public form
+              </Link>
+            ) : null}
           </div>
           <div className="flex items-center gap-3">
             <div className="relative">

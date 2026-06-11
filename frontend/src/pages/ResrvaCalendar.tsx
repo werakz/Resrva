@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { Ban, ChevronLeft, ChevronRight, Users } from "lucide-react";
 import { apiFetch, toJsonBody } from "../lib/api";
-import type { Area, Booking, OnlineBookingBlock, TableRecord } from "../types";
+import { bookingTypeSoftStyle } from "../lib/bookingTypeColours";
+import type { Area, Booking, BookingType, MetaPayload, OnlineBookingBlock, TableRecord } from "../types";
 import { LoadingState } from "../components/resrva/LoadingState";
 import { StatusBadge } from "../components/resrva/StatusBadge";
 import { Modal } from "../components/ui/modal";
@@ -27,6 +28,12 @@ type DayStats = {
 type DayStatsDraft = DayStats & {
   lunchTableIds: Set<number>;
   dinnerTableIds: Set<number>;
+};
+
+type CalendarTag = {
+  key: string;
+  label: string;
+  colour?: string | null;
 };
 
 type MealFilter = "all" | "lunch" | "dinner";
@@ -116,13 +123,72 @@ function pluralize(count: number, label: string): string {
 }
 
 function bookingAreaLabel(booking: Booking): string {
+  if (booking.booking_type === "event") {
+    return booking.table_numbers
+      ? `Table ${booking.table_numbers}`
+      : booking.assigned_area_name || booking.event_reserved_area_names || booking.preferred_area_name || "No table";
+  }
+
   return booking.assigned_area_names || booking.assigned_area_name || booking.preferred_area_name || "Unassigned";
 }
 
 function bookingEventLabel(booking: Booking): string {
   if (booking.booking_type === "table") return "Table booking";
+  if (booking.booking_type === "event") return booking.booking_type_name || booking.event_type || "Event";
 
   return "Function";
+}
+
+function bookingTypeColourForCalendar(booking: Booking, bookingTypes: BookingType[]): string | null {
+  if (booking.booking_type_colour) {
+    return booking.booking_type_colour;
+  }
+
+  if (booking.booking_type_id) {
+    const matchingType = bookingTypes.find((type) => Number(type.id) === Number(booking.booking_type_id));
+    if (matchingType?.colour) {
+      return matchingType.colour;
+    }
+  }
+
+  if (booking.booking_type === "function") {
+    return (
+      bookingTypes.find((type) => type.slug === "function-enquiry")?.colour ||
+      bookingTypes.find((type) => type.category === "function")?.colour ||
+      null
+    );
+  }
+
+  return null;
+}
+
+function bookingCalendarTags(bookings: Booking[], bookingTypes: BookingType[]): CalendarTag[] {
+  const tags = new Map<string, CalendarTag>();
+
+  for (const booking of bookings) {
+    if (booking.booking_type === "table") {
+      continue;
+    }
+
+    const label = bookingEventLabel(booking);
+    const key = booking.booking_type === "function" ? "function" : `${booking.booking_type}-${booking.booking_type_id || label}`;
+    const colour = bookingTypeColourForCalendar(booking, bookingTypes);
+    const existing = tags.get(key);
+
+    if (existing) {
+      if (!existing.colour && colour) {
+        existing.colour = colour;
+      }
+    } else {
+      tags.set(key, {
+        key,
+        label,
+        colour,
+      });
+    }
+  }
+
+  return [...tags.values()];
 }
 
 function calendarStart(month: Date): Date {
@@ -182,6 +248,7 @@ function loadStyle(load: number) {
 export default function ResrvaCalendar() {
   const [items, setItems] = useState<Booking[] | null>(null);
   const [tablesData, setTablesData] = useState<TablesPayload | null>(null);
+  const [bookingTypes, setBookingTypes] = useState<BookingType[]>([]);
   const [currentMonth, setCurrentMonth] = useState(() => startOfMonth(new Date()));
   const [selectedDate, setSelectedDate] = useState(() => toIsoDate(new Date()));
   const [mealFilter, setMealFilter] = useState<MealFilter>("all");
@@ -192,11 +259,12 @@ export default function ResrvaCalendar() {
 
   const loadCalendar = () => {
     setError("");
-    Promise.all([apiFetch<CalendarPayload>("calendar"), apiFetch<TablesPayload>("tables")])
-      .then(([calendarPayload, tablesPayload]) => {
+    Promise.all([apiFetch<CalendarPayload>("calendar"), apiFetch<TablesPayload>("tables"), apiFetch<MetaPayload>("meta")])
+      .then(([calendarPayload, tablesPayload, metaPayload]) => {
         setItems(calendarPayload.items);
         setOnlineBookingBlocks((calendarPayload.online_booking_blocks || []).map((block) => block.block_date));
         setTablesData(tablesPayload);
+        setBookingTypes(metaPayload.booking_types || []);
       })
       .catch((err) => setError(err instanceof Error ? err.message : "Calendar failed to load."));
   };
@@ -267,18 +335,24 @@ export default function ResrvaCalendar() {
       existing.bookings.push(booking);
       existing.guests += guestCount;
 
-      if (booking.booking_type === "function") {
-        const areaIds = parseIdList(booking.assigned_area_ids);
-        if (!areaIds.length && booking.assigned_area_id) {
-          areaIds.push(Number(booking.assigned_area_id));
+      let wholeAreaIds: number[] = [];
+      if (booking.booking_type === "function" || booking.booking_type === "event") {
+        wholeAreaIds =
+          booking.booking_type === "event"
+            ? parseIdList(booking.event_reserved_area_ids)
+            : parseIdList(booking.assigned_area_ids);
+        if (booking.booking_type === "function" && !wholeAreaIds.length && booking.assigned_area_id) {
+          wholeAreaIds.push(Number(booking.assigned_area_id));
         }
 
-        for (const areaId of areaIds) {
+        for (const areaId of wholeAreaIds) {
           for (const tableId of reservableTableIdsByArea.get(areaId) || []) {
             reservedTableIds.add(tableId);
           }
         }
-      } else {
+      }
+
+      if (!wholeAreaIds.length) {
         for (const tableId of parseIdList(booking.table_ids)) {
           if (reservableTableIds.has(tableId)) {
             reservedTableIds.add(tableId);
@@ -443,7 +517,8 @@ export default function ResrvaCalendar() {
                   };
                   const style = loadStyle(stats.load);
                   const barWidth = `${Math.min(stats.load, 100)}%`;
-                  const hasFunction = stats.bookings.some((booking) => booking.booking_type === "function");
+                  const calendarTags = bookingCalendarTags(stats.bookings, bookingTypes);
+                  const firstTag = calendarTags[0];
                   const isOnlineBlocked = onlineBookingBlockSet.has(iso);
 
                   return (
@@ -457,16 +532,23 @@ export default function ResrvaCalendar() {
                           : "bg-white hover:bg-gray-50 dark:bg-transparent dark:hover:bg-white/[0.04]"
                       } ${!isCurrentMonth ? "text-gray-400" : "text-gray-900 dark:text-white/90"}`}
                     >
-                      <div className="flex min-w-0 items-start justify-between gap-2">
+                      <div className="flex min-w-0 items-start gap-1.5">
                         <div className="shrink-0 text-sm font-semibold">{day.getDate()}</div>
-                        {hasFunction ? (
-                          <span
-                            className="max-w-[calc(100%-2rem)] truncate rounded-md bg-blue-light-50 px-1.5 py-0.5 text-[10px] font-semibold text-blue-light-500 dark:bg-blue-light-500/15 dark:text-blue-light-500"
-                            title="Function"
-                          >
-                            Function
-                          </span>
-                        ) : null}
+                        <div className="ml-auto flex min-w-0 items-center justify-end gap-1">
+                          {firstTag ? (
+                            <span
+                              className="max-w-20 truncate rounded-md px-1.5 py-0.5 text-[10px] font-semibold"
+                              title={firstTag.label}
+                              style={bookingTypeSoftStyle(firstTag.colour)}
+                            >
+                              {firstTag.label}
+                            </span>
+                          ) : null}
+                          {calendarTags.length > 1 ? (
+                            <span className="rounded-md bg-gray-100 px-1.5 py-0.5 text-[10px] font-semibold text-gray-500">
+                              +{calendarTags.length - 1}
+                            </span>
+                          ) : null}
                         {isOnlineBlocked ? (
                           <span
                             className="rounded-md bg-error-50 px-1.5 py-0.5 text-[10px] font-semibold text-error-600 dark:bg-error-500/15 dark:text-error-400"
@@ -475,6 +557,7 @@ export default function ResrvaCalendar() {
                             Off
                           </span>
                         ) : null}
+                        </div>
                       </div>
 
                       {stats.bookings.length ? (
@@ -556,11 +639,12 @@ export default function ResrvaCalendar() {
                       <p className="truncate text-sm font-semibold text-gray-800 dark:text-gray-200">
                         {booking.customer_name}
                       </p>
-                      {booking.booking_type === "function" ? (
-                        <span className="rounded-md bg-blue-light-50 px-1.5 py-0.5 text-[10px] font-semibold text-blue-light-500 dark:bg-blue-light-500/15 dark:text-blue-light-500">
-                          Function
-                        </span>
-                      ) : null}
+                      <span
+                        className="rounded-md border px-1.5 py-0.5 text-[10px] font-semibold"
+                        style={bookingTypeSoftStyle(bookingTypeColourForCalendar(booking, bookingTypes))}
+                      >
+                        {bookingEventLabel(booking)}
+                      </span>
                     </div>
                     <p className="mt-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-gray-500 dark:text-gray-400">
                       <span className="inline-flex items-center gap-1 whitespace-nowrap">

@@ -7,7 +7,7 @@ import { FieldLabel, FormMessage, inputClass } from "../components/resrva/FormFi
 export default function Login() {
   const { user, login } = useAuth();
   const navigate = useNavigate();
-  const [email, setEmail] = useState("manager@resrva.test");
+  const [email, setEmail] = useState("admin@resrva.test");
   const [password, setPassword] = useState("Password123!");
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);

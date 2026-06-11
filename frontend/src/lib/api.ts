@@ -1,3 +1,5 @@
+import { currentPublicVenueSlug } from "./publicVenue";
+
 const defaultApiUrl = "http://localhost/Resrva/api/index.php";
 
 export class ApiError extends Error {
@@ -16,8 +18,16 @@ const apiBase = import.meta.env.VITE_API_URL || defaultApiUrl;
 
 export function apiUrl(route: string): string {
   const [path, query = ""] = route.split("?");
+  const params = new URLSearchParams(query);
+  const browserParams = typeof window !== "undefined" ? new URLSearchParams(window.location.search) : null;
+  const venueSlug = browserParams?.get("venue") || browserParams?.get("venue_slug") || currentPublicVenueSlug();
+  if (venueSlug && !params.has("venue") && !params.has("venue_slug")) {
+    params.set("venue", venueSlug);
+  }
+
+  const queryString = params.toString();
   const separator = apiBase.includes("?") ? "&" : "?";
-  return `${apiBase}${separator}r=${encodeURIComponent(path)}${query ? `&${query}` : ""}`;
+  return `${apiBase}${separator}r=${encodeURIComponent(path)}${queryString ? `&${queryString}` : ""}`;
 }
 
 export async function apiFetch<T>(

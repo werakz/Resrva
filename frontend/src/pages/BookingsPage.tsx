@@ -20,7 +20,9 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { apiFetch, toJsonBody } from "../lib/api";
-import type { Area, Booking, MetaPayload, Paginated, TableRecord } from "../types";
+import { bookingTypeColourVars } from "../lib/bookingTypeColours";
+import { getBookingIcon } from "../lib/bookingTypeIcons";
+import type { Area, Booking, BookingType, MetaPayload, Paginated, TableRecord } from "../types";
 import {
   FieldLabel,
   FormMessage,
@@ -38,7 +40,6 @@ import {
 } from "../components/resrva/AiReplyComposer";
 import { CustomerNotifyPrompt } from "../components/resrva/CustomerNotifyPrompt";
 import Button from "../components/ui/button/Button";
-import Badge from "../components/ui/badge/Badge";
 import { Table, TableBody, TableCell, TableHeader, TableRow } from "../components/ui/table";
 
 type ManualBookingForm = {
@@ -63,9 +64,12 @@ type TablesPayload = {
 };
 
 type BookingGroup = {
-  key: "lunch" | "dinner" | "functions";
+  key: string;
   title: string;
   items: Booking[];
+  timeRange?: string;
+  colour?: string | null;
+  icon?: string | null;
 };
 
 type AvailabilityLoadState = {
@@ -79,15 +83,12 @@ type TableAvailability = {
   blockedAreaIds: Set<number>;
 };
 
-type GroupBadgeColor = "primary" | "success" | "error" | "warning" | "info" | "light" | "dark";
-
 const bookingGroupStyles: Record<
-  BookingGroup["key"],
+  string,
   {
     accent: string;
     iconWrap: string;
     icon: string;
-    badge: GroupBadgeColor;
     timeRange: string;
     Icon: LucideIcon;
   }
@@ -96,7 +97,6 @@ const bookingGroupStyles: Record<
     accent: "border-t-brand-500",
     iconWrap: "bg-brand-50 dark:bg-brand-500/15",
     icon: "text-brand-500 dark:text-brand-400",
-    badge: "primary",
     timeRange: "11:00 AM - 2:30 PM",
     Icon: Sun,
   },
@@ -104,7 +104,6 @@ const bookingGroupStyles: Record<
     accent: "border-t-warning-500",
     iconWrap: "bg-warning-50 dark:bg-warning-500/15",
     icon: "text-warning-500 dark:text-orange-400",
-    badge: "warning",
     timeRange: "5:00 PM - 10:00 PM",
     Icon: Moon,
   },
@@ -112,10 +111,17 @@ const bookingGroupStyles: Record<
     accent: "border-t-blue-light-500",
     iconWrap: "bg-blue-light-50 dark:bg-blue-light-500/15",
     icon: "text-blue-light-500",
-    badge: "info",
     timeRange: "All Day",
     Icon: CalendarCheck,
   },
+};
+
+const eventGroupStyle = {
+  accent: "border-t-success-500",
+  iconWrap: "bg-success-50 dark:bg-success-500/15",
+  icon: "text-success-600 dark:text-success-500",
+  timeRange: "Event",
+  Icon: CalendarCheck,
 };
 
 const emptyManualBooking: ManualBookingForm = {
@@ -153,8 +159,57 @@ type SortKey = (typeof sortOptions)[number]["value"];
 
 const tableStatuses = ["confirmed", "seated", "completed", "cancelled", "no_show"];
 const functionStatuses = ["pending", "approved", "confirmed", "declined", "cancelled"];
+const eventStatuses = ["pending", "confirmed", "waitlist", "completed", "cancelled"];
 const compactInputClass = `${inputClass} h-10 py-2`;
 const compactTextareaClass = `${textareaClass} min-h-[72px] py-2`;
+
+function bookingTypeColourFor(
+  booking: Booking,
+  bookingTypes: BookingType[] = [],
+): string | null {
+  if (booking.booking_type_colour) return booking.booking_type_colour;
+  if (booking.booking_type_id) {
+    return bookingTypes.find((type) => Number(type.id) === Number(booking.booking_type_id))?.colour || null;
+  }
+  const fallbackSlug =
+    booking.booking_type === "function"
+      ? "function-enquiry"
+      : booking.booking_type === "table" && minutesFromTime(booking.start_time) < 17 * 60
+        ? "lunch"
+        : booking.booking_type === "table"
+          ? "dinner"
+          : "";
+
+  return (
+    bookingTypes.find((type) => type.slug === fallbackSlug)?.colour ||
+    (booking.booking_type === "function" ? bookingTypes.find((type) => type.category === "function")?.colour : null) ||
+    null
+  );
+}
+
+function bookingTypeIconFor(
+  booking: Booking,
+  bookingTypes: BookingType[] = [],
+): string | null {
+  if (booking.booking_type_icon) return booking.booking_type_icon;
+  if (booking.booking_type_id) {
+    return bookingTypes.find((type) => Number(type.id) === Number(booking.booking_type_id))?.icon || null;
+  }
+  const fallbackSlug =
+    booking.booking_type === "function"
+      ? "function-enquiry"
+      : booking.booking_type === "table" && minutesFromTime(booking.start_time) < 17 * 60
+        ? "lunch"
+        : booking.booking_type === "table"
+          ? "dinner"
+          : "";
+
+  return (
+    bookingTypes.find((type) => type.slug === fallbackSlug)?.icon ||
+    (booking.booking_type === "function" ? bookingTypes.find((type) => type.category === "function")?.icon : null) ||
+    null
+  );
+}
 
 const statusControlStyles: Record<string, string> = {
   confirmed:
@@ -327,6 +382,7 @@ function TablePicker({
   onChange,
   unavailableTableIds,
   blockedAreaIds,
+  visibleAreaIds,
   availabilityLabel,
   isAvailabilityLoading = false,
 }: {
@@ -336,6 +392,7 @@ function TablePicker({
   onChange: (ids: string[]) => void;
   unavailableTableIds?: Set<string>;
   blockedAreaIds?: Set<number>;
+  visibleAreaIds?: string[];
   availabilityLabel?: string;
   isAvailabilityLoading?: boolean;
 }) {
@@ -346,6 +403,10 @@ function TablePicker({
   const selected = new Set(selectedIds);
   const unavailable = unavailableTableIds ?? new Set<string>();
   const blockedAreas = blockedAreaIds ?? new Set<number>();
+  const visibleAreaSet = visibleAreaIds?.length ? new Set(visibleAreaIds) : null;
+  const visibleAreas = visibleAreaSet
+    ? areas.filter((area) => visibleAreaSet.has(String(area.id)))
+    : areas;
   const selectedTables = tables
     .filter((table) => selected.has(String(table.id)))
     .sort((left, right) => Number(left.table_number) - Number(right.table_number));
@@ -420,7 +481,7 @@ function TablePicker({
           </div>
         ) : null}
         <div className="max-h-[360px] space-y-2 overflow-y-auto p-3">
-        {areas.map((area) => {
+        {visibleAreas.map((area) => {
           const areaTables = tables
             .filter((table) => Number(table.area_id) === Number(area.id))
             .sort((left, right) => Number(left.table_number) - Number(right.table_number));
@@ -533,6 +594,15 @@ function minutesFromTime(time: string): number {
   return Number(hours) * 60 + Number(minutes);
 }
 
+function bookingDurationMinutes(booking: Booking | null | undefined, fallback: number): number {
+  if (!booking?.start_time || !booking?.end_time) {
+    return fallback;
+  }
+
+  const duration = minutesFromTime(booking.end_time) - minutesFromTime(booking.start_time);
+  return duration > 0 ? duration : fallback;
+}
+
 function bookingTimeValue(booking: Booking): number {
   return Date.parse(`${booking.booking_date}T${booking.start_time.slice(0, 5)}:00`) || 0;
 }
@@ -579,7 +649,7 @@ function bookingBlocksTableAvailability(booking: Booking): boolean {
     return ["approved", "confirmed"].includes(booking.status);
   }
 
-  return !["cancelled", "no_show", "declined"].includes(booking.status);
+  return !["cancelled", "no_show", "declined", "waitlist"].includes(booking.status);
 }
 
 function bookingOverlapsSelection(booking: Booking, date: string, time: string, durationMinutes: number): boolean {
@@ -601,12 +671,16 @@ function buildTableAvailability({
   time,
   durationMinutes,
   excludeBookingId,
+  contextBookingType,
+  contextBookingSessionId,
 }: {
   bookings: Booking[];
   date: string;
   time: string;
   durationMinutes: number;
   excludeBookingId?: number;
+  contextBookingType?: Booking["booking_type"];
+  contextBookingSessionId?: number | null;
 }): TableAvailability {
   const unavailableTableIds = new Set<string>();
   const blockedAreaIds = new Set<number>();
@@ -633,6 +707,23 @@ function buildTableAvailability({
         blockedAreaIds.add(Number(areaId));
       }
       continue;
+    }
+
+    if (booking.booking_type === "event") {
+      const reservedAreaIds = parseTableIds(booking.event_reserved_area_ids);
+      const sameEventSession =
+        contextBookingType === "event" &&
+        booking.booking_session_id !== null &&
+        booking.booking_session_id !== undefined &&
+        contextBookingSessionId !== null &&
+        contextBookingSessionId !== undefined &&
+        Number(booking.booking_session_id) === Number(contextBookingSessionId);
+
+      if (!sameEventSession) {
+        for (const areaId of reservedAreaIds) {
+          blockedAreaIds.add(Number(areaId));
+        }
+      }
     }
 
     for (const tableId of parseTableIds(booking.table_ids)) {
@@ -671,14 +762,31 @@ function availabilityStatusLabel(date: string, time: string, state: Availability
   return `Availability for ${formatRangeDate(date)} at ${formatDisplayTime(time)}`;
 }
 
-function groupBookings(bookings: Booking[]): BookingGroup[] {
+function groupBookings(bookings: Booking[], bookingTypes: BookingType[] = []): BookingGroup[] {
   const lunch: Booking[] = [];
   const dinner: Booking[] = [];
   const functions: Booking[] = [];
+  const events = new Map<string, BookingGroup>();
 
   for (const booking of bookings) {
     if (booking.booking_type === "function") {
       functions.push(booking);
+      continue;
+    }
+
+    if (booking.booking_type === "event") {
+      const typeName = booking.booking_type_name || booking.event_type || "Event";
+      const key = `event-${booking.booking_session_id || booking.booking_type_id || typeName}-${booking.booking_date}`;
+      const group = events.get(key) || {
+        key,
+        title: `${typeName} - ${formatDisplayDate(booking.booking_date)}`,
+        timeRange: formatDisplayTime(booking.start_time),
+        colour: bookingTypeColourFor(booking, bookingTypes),
+        icon: bookingTypeIconFor(booking, bookingTypes),
+        items: [],
+      };
+      group.items.push(booking);
+      events.set(key, group);
       continue;
     }
 
@@ -689,27 +797,43 @@ function groupBookings(bookings: Booking[]): BookingGroup[] {
     }
   }
 
+  const lunchType = bookingTypes.find((type) => type.slug === "lunch");
+  const dinnerType = bookingTypes.find((type) => type.slug === "dinner");
+  const functionType = bookingTypes.find((type) => type.slug === "function-enquiry") || bookingTypes.find((type) => type.category === "function");
+
   return [
     {
       key: "lunch",
       title: "Lunch",
+      colour: lunchType?.colour || lunch.find((booking) => booking.booking_type_colour)?.booking_type_colour,
+      icon: lunchType?.icon || lunch.find((booking) => booking.booking_type_icon)?.booking_type_icon,
       items: lunch,
     },
     {
       key: "dinner",
       title: "Dinner",
+      colour: dinnerType?.colour || dinner.find((booking) => booking.booking_type_colour)?.booking_type_colour,
+      icon: dinnerType?.icon || dinner.find((booking) => booking.booking_type_icon)?.booking_type_icon,
       items: dinner,
     },
     {
       key: "functions",
       title: "Functions",
+      colour: functionType?.colour || functions.find((booking) => booking.booking_type_colour)?.booking_type_colour,
+      icon: functions.find((booking) => booking.booking_type_icon)?.booking_type_icon || functionType?.icon,
       items: functions,
     },
-  ];
+    ...Array.from(events.values()),
+  ].filter((group) => group.items.length > 0);
 }
 
 function statusOptionsFor(booking: Booking) {
-  const options = booking.booking_type === "function" ? functionStatuses : tableStatuses;
+  const options =
+    booking.booking_type === "function"
+      ? functionStatuses
+      : booking.booking_type === "event"
+        ? eventStatuses
+        : tableStatuses;
 
   return options.includes(booking.status) ? options : [booking.status, ...options];
 }
@@ -1044,11 +1168,23 @@ function BookingRow({
   onStatusChange: (value: string) => void;
   onEdit: () => void;
 }) {
+  const areaLabel =
+    booking.assigned_area_names ||
+    booking.assigned_area_name ||
+    booking.preferred_area_name ||
+    booking.event_reserved_area_names ||
+    "";
   const tableLabel = booking.table_numbers
     ? `Table ${booking.table_numbers}`
-    : booking.booking_type === "function"
-      ? booking.assigned_area_names || booking.assigned_area_name || booking.preferred_area_name || "Unassigned"
+    : booking.booking_type === "event"
+      ? "No table"
+      : booking.booking_type === "function"
+      ? areaLabel || "Unassigned"
       : "Unassigned";
+  const showAreaLabel = areaLabel && areaLabel !== tableLabel;
+  const detailText = [booking.custom_answers_summary, booking.notes, booking.event_type]
+    .filter(Boolean)
+    .join("\n");
 
   return (
     <TableRow className="bg-white align-top dark:bg-transparent">
@@ -1072,9 +1208,9 @@ function BookingRow({
       </TableCell>
       <TableCell className="px-5 py-4 text-start">
         <p className="font-medium text-gray-800 text-theme-sm dark:text-white/90">{tableLabel}</p>
-        <p className="mt-1 text-theme-xs text-gray-500 dark:text-gray-400">
-          {booking.assigned_area_names || booking.assigned_area_name || booking.preferred_area_name || "-"}
-        </p>
+        {showAreaLabel ? (
+          <p className="mt-1 text-theme-xs text-gray-500 dark:text-gray-400">{areaLabel}</p>
+        ) : null}
       </TableCell>
       <TableCell className="px-5 py-4 text-start">
         <SelectInput
@@ -1094,10 +1230,10 @@ function BookingRow({
       </TableCell>
       <TableCell className="px-5 py-4 text-start">
         <p
-          className="max-w-[220px] truncate text-theme-sm text-gray-500 dark:text-gray-400"
-          title={booking.notes || booking.event_type || "-"}
+          className="max-w-[220px] whitespace-pre-line text-theme-sm text-gray-500 dark:text-gray-400"
+          title={detailText || "-"}
         >
-          {booking.notes || booking.event_type || "-"}
+          {detailText || "-"}
         </p>
       </TableCell>
       <TableCell className="px-5 py-4 text-start">
@@ -1266,10 +1402,11 @@ export default function BookingsPage() {
   }, [editingBooking, editForm.date]);
 
   const groupedBookings = useMemo(
-    () => groupBookings(sortedBookings(data?.items || [], sortKey)),
-    [data, sortKey],
+    () => groupBookings(sortedBookings(data?.items || [], sortKey), meta?.booking_types || []),
+    [data, meta?.booking_types, sortKey],
   );
   const defaultDurationMinutes = Number(meta?.settings.default_duration_minutes || 120);
+  const editDurationMinutes = bookingDurationMinutes(editingBooking, defaultDurationMinutes);
   const createTableAvailability = useMemo(
     () =>
       buildTableAvailability({
@@ -1286,10 +1423,12 @@ export default function BookingsPage() {
         bookings: editAvailability.items,
         date: editForm.date,
         time: editForm.time,
-        durationMinutes: defaultDurationMinutes,
+        durationMinutes: editDurationMinutes,
         excludeBookingId: editingBooking?.id,
+        contextBookingType: editingBooking?.booking_type,
+        contextBookingSessionId: editingBooking?.booking_session_id ?? null,
       }),
-    [defaultDurationMinutes, editAvailability.items, editForm.date, editForm.time, editingBooking?.id],
+    [editAvailability.items, editDurationMinutes, editForm.date, editForm.time, editingBooking?.booking_session_id, editingBooking?.booking_type, editingBooking?.id],
   );
   const createAvailabilityKey = tableAvailabilityKey(createTableAvailability);
   const editAvailabilityKey = tableAvailabilityKey(editTableAvailability);
@@ -1492,13 +1631,27 @@ export default function BookingsPage() {
         ? {
             table_ids: editForm.table_ids.map(Number),
           }
-        : {
-            assigned_area_ids: editForm.assigned_area_ids.map(Number),
-            assigned_area_id: editForm.assigned_area_ids[0] || null,
-          };
+        : editingBooking.booking_type === "function"
+          ? {
+              assigned_area_ids: editForm.assigned_area_ids.map(Number),
+              assigned_area_id: editForm.assigned_area_ids[0] || null,
+            }
+          : editingBooking.booking_type === "event"
+            ? {
+                table_ids: editForm.table_ids.map(Number),
+              }
+            : {};
 
     if (editingBooking.booking_type === "table" && !editForm.table_ids.length) {
       setModalMessage({ type: "error", text: "Select at least one table." });
+      return;
+    }
+    if (
+      editingBooking.booking_type === "event" &&
+      !editForm.table_ids.length &&
+      !["pending", "waitlist", "cancelled", "declined", "no_show"].includes(editForm.status || editingBooking.status)
+    ) {
+      setModalMessage({ type: "error", text: "Select at least one table for this event booking." });
       return;
     }
 
@@ -1903,6 +2056,32 @@ export default function BookingsPage() {
                     </section>
                   ) : null}
 
+                  {editingBooking.booking_type === "event" ? (
+                    <section className="rounded-lg border border-gray-200 p-3 dark:border-gray-800">
+                      <h3 className="mb-3 text-xs font-semibold uppercase text-gray-500">Event</h3>
+                      <dl className="grid gap-3 text-sm sm:grid-cols-3 lg:grid-cols-1">
+                        <div>
+                          <dt className="text-gray-500">Booking type</dt>
+                          <dd className="font-medium text-gray-900">
+                            {editingBooking.booking_type_name || editingBooking.event_type || "-"}
+                          </dd>
+                        </div>
+                        <div>
+                          <dt className="text-gray-500">Reserved area</dt>
+                          <dd className="font-medium text-gray-900">
+                            {editingBooking.event_reserved_area_names || "No reserved area"}
+                          </dd>
+                        </div>
+                        <div>
+                          <dt className="text-gray-500">Custom answers</dt>
+                          <dd className="whitespace-pre-line font-medium text-gray-900">
+                            {editingBooking.custom_answers_summary || "-"}
+                          </dd>
+                        </div>
+                      </dl>
+                    </section>
+                  ) : null}
+
                   <section className="rounded-lg border border-gray-200 p-3 dark:border-gray-800">
                     <div className="grid gap-3 sm:grid-cols-2">
                       <div>
@@ -1927,7 +2106,7 @@ export default function BookingsPage() {
                   </section>
                 </div>
 
-                {editingBooking.booking_type === "table" ? (
+                {editingBooking.booking_type === "table" || editingBooking.booking_type === "event" ? (
                   <section className="rounded-lg border border-gray-200 p-3 dark:border-gray-800">
                     <h3 className="mb-3 text-xs font-semibold uppercase text-gray-500">Tables</h3>
                     <div id="edit-tables">
@@ -1938,6 +2117,11 @@ export default function BookingsPage() {
                         onChange={(ids) => updateEditForm("table_ids", ids)}
                         unavailableTableIds={editTableAvailability.unavailableTableIds}
                         blockedAreaIds={editTableAvailability.blockedAreaIds}
+                        visibleAreaIds={
+                          editingBooking.booking_type === "event"
+                            ? parseTableIds(editingBooking.event_reserved_area_ids)
+                            : undefined
+                        }
                         isAvailabilityLoading={editAvailability.loading}
                         availabilityLabel={availabilityStatusLabel(editForm.date, editForm.time, editAvailability)}
                       />
@@ -1953,9 +2137,7 @@ export default function BookingsPage() {
                       </div>
                       <div>
                         <dt className="text-gray-500">Preferred area</dt>
-                        <dd className="font-medium text-gray-900">
-                          {editingBooking.preferred_area_name || "-"}
-                        </dd>
+                        <dd className="font-medium text-gray-900">{editingBooking.preferred_area_name || "-"}</dd>
                       </div>
                       <div>
                         <dt className="text-gray-500">Current area</dt>
@@ -2037,16 +2219,24 @@ export default function BookingsPage() {
             ) : null}
           </section>
 
+          {groupedBookings.length === 0 ? (
+            <section className="rounded-2xl border border-dashed border-gray-200 bg-white px-6 py-10 text-center text-theme-sm font-medium text-gray-500 dark:border-gray-800 dark:bg-white/[0.03] dark:text-gray-400">
+              No bookings match the current date range.
+            </section>
+          ) : null}
+
           {groupedBookings.map((group) => {
-            const styles = bookingGroupStyles[group.key];
-            const isExpanded = expandedGroups[group.key];
-            const Icon = styles.Icon;
+            const styles = bookingGroupStyles[group.key] || eventGroupStyle;
+            const isExpanded = expandedGroups[group.key] ?? true;
+            const Icon = getBookingIcon(group.icon, styles.Icon);
             const guestTotal = totalGuests(group.items);
+            const colourStyle = bookingTypeColourVars(group.colour);
 
             return (
               <section
                 key={group.key}
                 className={`overflow-hidden rounded-2xl border border-t-4 border-gray-200 bg-white dark:border-gray-800 dark:bg-white/[0.03] ${styles.accent}`}
+                style={{ ...colourStyle, borderTopColor: "var(--booking-type-colour)" }}
               >
                 <button
                   type="button"
@@ -2054,19 +2244,22 @@ export default function BookingsPage() {
                   onClick={() => toggleGroup(group.key)}
                   aria-expanded={isExpanded}
                 >
-                  <span className={`flex size-12 flex-none items-center justify-center rounded-xl ${styles.iconWrap}`}>
-                    <Icon className={`size-5 ${styles.icon}`} />
+                  <span
+                    className={`flex size-12 flex-none items-center justify-center rounded-xl ${styles.iconWrap}`}
+                    style={{ backgroundColor: "color-mix(in srgb, var(--booking-type-colour) 12%, white)" }}
+                  >
+                    <Icon className={`size-5 ${styles.icon}`} style={{ color: "var(--booking-type-colour)" }} />
                   </span>
                   <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
                       <h2 className="text-lg font-semibold text-gray-800 dark:text-white/90">{group.title}</h2>
-                      <span className="text-sm font-medium text-gray-500 dark:text-gray-400">{styles.timeRange}</span>
-                      <Badge color={styles.badge} size="sm">
+                      <span className="text-sm font-medium text-gray-500 dark:text-gray-400">{group.timeRange || styles.timeRange}</span>
+                      <span className="inline-flex items-center justify-center rounded-full bg-gray-100 px-2.5 py-0.5 text-theme-xs font-medium text-gray-700 dark:bg-white/5 dark:text-white/80">
                         {pluralize(group.items.length, "booking")}
-                      </Badge>
-                      <Badge color="light" size="sm">
+                      </span>
+                      <span className="inline-flex items-center justify-center rounded-full bg-gray-100 px-2.5 py-0.5 text-theme-xs font-medium text-gray-700 dark:bg-white/5 dark:text-white/80">
                         {pluralize(guestTotal, "guest")}
-                      </Badge>
+                      </span>
                     </div>
                   </div>
                   <ChevronDown

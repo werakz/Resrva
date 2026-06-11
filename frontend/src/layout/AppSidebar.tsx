@@ -1,21 +1,26 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation } from "react-router";
 import {
   CalendarDays,
+  Building2,
+  BriefcaseBusiness,
   LayoutDashboard,
   ListChecks,
   Settings,
   Table2,
+  Tags,
   Users,
   Wine,
 } from "lucide-react";
 import { ChevronDownIcon, HorizontaLDots } from "../icons";
 import { useSidebar } from "../context/SidebarContext";
+import { useAuth } from "../context/AuthContext";
 
 type NavItem = {
   name: string;
   icon: React.ReactNode;
   path?: string;
+  platformOnly?: boolean;
   subItems?: { name: string; path: string; pro?: boolean; new?: boolean }[];
 };
 
@@ -41,9 +46,25 @@ const navItems: NavItem[] = [
     path: "/app/calendar",
   },
   {
+    icon: <Tags className="size-5" />,
+    name: "Booking Types",
+    path: "/app/booking-types",
+  },
+  {
     icon: <Table2 className="size-5" />,
     name: "Tables / Areas",
     path: "/app/tables",
+  },
+  {
+    icon: <BriefcaseBusiness className="size-5" />,
+    name: "Resrva Admin",
+    path: "/app/resrva-admin/clients",
+    platformOnly: true,
+  },
+  {
+    icon: <Building2 className="size-5" />,
+    name: "Venues",
+    path: "/app/venues",
   },
   {
     icon: <Users className="size-5" />,
@@ -61,7 +82,17 @@ const othersItems: NavItem[] = [];
 
 const AppSidebar: React.FC = () => {
   const { isExpanded, isMobileOpen, isHovered, setIsHovered } = useSidebar();
+  const { user, supportMode } = useAuth();
   const location = useLocation();
+  const isPlatformAdmin = user?.is_platform_admin === true || user?.is_platform_admin === 1;
+  const visibleNavItems = useMemo(
+    () => navItems.filter((item) => {
+      if (item.platformOnly) return isPlatformAdmin;
+      if (isPlatformAdmin && !supportMode) return false;
+      return true;
+    }),
+    [isPlatformAdmin, supportMode],
+  );
 
   const [openSubmenu, setOpenSubmenu] = useState<{
     type: "main" | "others";
@@ -81,7 +112,7 @@ const AppSidebar: React.FC = () => {
   useEffect(() => {
     let submenuMatched = false;
     ["main", "others"].forEach((menuType) => {
-      const items = menuType === "main" ? navItems : othersItems;
+      const items = menuType === "main" ? visibleNavItems : othersItems;
       items.forEach((nav, index) => {
         if (nav.subItems) {
           nav.subItems.forEach((subItem) => {
@@ -100,7 +131,7 @@ const AppSidebar: React.FC = () => {
     if (!submenuMatched) {
       setOpenSubmenu(null);
     }
-  }, [location, isActive]);
+  }, [location, isActive, visibleNavItems]);
 
   useEffect(() => {
     if (openSubmenu !== null) {
@@ -301,7 +332,7 @@ const AppSidebar: React.FC = () => {
                   <HorizontaLDots className="size-6" />
                 )}
               </h2>
-              {renderMenuItems(navItems, "main")}
+              {renderMenuItems(visibleNavItems, "main")}
             </div>
             {othersItems.length ? <div className="">
               <h2

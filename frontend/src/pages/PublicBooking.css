@@ -384,7 +384,7 @@
 .public-booking-services {
   margin-top: 16px;
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(108px, 1fr));
   gap: 10px;
 }
 
@@ -401,13 +401,13 @@
 }
 
 .public-booking-service:hover:not(:disabled) {
-  border-color: #276749;
-  color: #276749;
+  border-color: var(--booking-type-colour, #276749);
+  color: var(--booking-type-colour, #276749);
 }
 
 .public-booking-service.is-selected {
-  border-color: #276749;
-  background: #276749;
+  border-color: var(--booking-type-colour, #276749);
+  background: var(--booking-type-colour, #276749);
   color: #fff;
 }
 
@@ -465,6 +465,94 @@
   cursor: not-allowed;
   background: #f9fafb;
   color: #98a2b3;
+}
+
+.public-booking-event-sessions {
+  min-height: 336px;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  background: #fff;
+  padding: 22px;
+  box-shadow: var(--shadow-theme-xs);
+}
+
+.public-booking-event-sessions-heading h2 {
+  margin: 0;
+  color: #101828;
+  font-size: 22px;
+  font-weight: 700;
+}
+
+.public-booking-event-sessions-heading p {
+  margin-top: 8px;
+  max-width: 640px;
+  color: #667085;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.public-booking-session-list {
+  margin-top: 20px;
+  display: grid;
+  gap: 10px;
+}
+
+.public-booking-session {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  border: 1px solid #d0d5dd;
+  border-radius: 8px;
+  background: #fff;
+  padding: 14px 16px;
+  text-align: left;
+  transition: border-color 0.15s ease, background 0.15s ease, box-shadow 0.15s ease;
+}
+
+.public-booking-session:hover {
+  border-color: var(--booking-type-colour, #276749);
+}
+
+.public-booking-session.is-selected {
+  border-color: var(--booking-type-colour, #276749);
+  background: color-mix(in srgb, var(--booking-type-colour, #276749) 12%, white);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--booking-type-colour, #276749) 16%, transparent);
+}
+
+.public-booking-session strong {
+  display: block;
+  color: #101828;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.public-booking-session small {
+  margin-top: 4px;
+  display: block;
+  color: #667085;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.public-booking-session em {
+  flex: 0 0 auto;
+  color: var(--booking-type-colour, #276749);
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 700;
+}
+
+.public-booking-empty,
+.public-booking-selected-session {
+  margin-top: 16px;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  background: #f9fafb;
+  padding: 12px 14px;
+  color: #344054;
+  font-size: 14px;
+  font-weight: 600;
 }
 
 .public-booking-panel {
@@ -965,5 +1053,11 @@
 
   .public-booking-confirmation-details strong {
     text-align: left;
+  }
+
+  .public-booking-session {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 8px;
   }
 }

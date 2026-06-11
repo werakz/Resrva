@@ -12,6 +12,7 @@ import { Link } from "react-router";
 import Chart from "react-apexcharts";
 import type { ApexOptions } from "apexcharts";
 import { apiFetch } from "../../lib/api";
+import { bookingTypeSoftStyle } from "../../lib/bookingTypeColours";
 import type { Booking, DashboardPayload } from "../../types";
 import { LoadingState } from "../../components/resrva/LoadingState";
 import { PageHeader } from "../../components/resrva/PageHeader";
@@ -46,6 +47,12 @@ function formatTime(value: string) {
 }
 
 function areaLabel(booking: Booking) {
+  if (booking.booking_type === "event") {
+    return booking.table_numbers
+      ? `Table ${booking.table_numbers}`
+      : booking.assigned_area_name || booking.event_reserved_area_names || "No table";
+  }
+
   if (booking.booking_type === "function") {
     return booking.assigned_area_names || booking.assigned_area_name || booking.preferred_area_name || "Unassigned";
   }
@@ -53,6 +60,24 @@ function areaLabel(booking: Booking) {
   return booking.table_numbers
     ? `Table ${booking.table_numbers}`
     : booking.assigned_area_name || booking.preferred_area_name || "No table";
+}
+
+function bookingTypeLabel(booking: Booking) {
+  if (booking.booking_type_name) return booking.booking_type_name;
+  if (booking.booking_type === "event") return booking.event_type || "Event";
+  if (booking.booking_type === "function") return "Function";
+  return Number(booking.start_time.slice(0, 2)) < 17 ? "Lunch" : "Dinner";
+}
+
+function BookingTypeBadge({ booking }: { booking: Booking }) {
+  return (
+    <span
+      className="inline-flex w-fit rounded-full border px-2 py-0.5 text-xs font-semibold"
+      style={bookingTypeSoftStyle(booking.booking_type_colour)}
+    >
+      {bookingTypeLabel(booking)}
+    </span>
+  );
 }
 
 function DashboardSection({
@@ -323,7 +348,10 @@ function TodayBookingsList({ bookings }: { bookings: Booking[] }) {
                   </td>
                   <td className="px-3 py-3 text-gray-700 dark:text-gray-300">
                     <div className="font-medium text-gray-900 dark:text-white">{booking.customer_name}</div>
-                    <div className="text-xs text-gray-500">{booking.booking_reference}</div>
+                    <div className="mt-1 flex flex-wrap items-center gap-2">
+                      <BookingTypeBadge booking={booking} />
+                      <span className="text-xs text-gray-500">{booking.booking_reference}</span>
+                    </div>
                   </td>
                   <td className="px-3 py-3 text-gray-700 dark:text-gray-300">{booking.guest_count}</td>
                   <td className="px-3 py-3 text-gray-700 dark:text-gray-300">{areaLabel(booking)}</td>
@@ -363,7 +391,10 @@ function UpcomingFunctionsCard({ functions }: { functions: Booking[] }) {
                   <p className="font-medium text-gray-900 dark:text-white">
                     {booking.event_type || "Function"}
                   </p>
-                  <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">{booking.customer_name}</p>
+                  <div className="mt-1 flex flex-wrap items-center gap-2">
+                    <BookingTypeBadge booking={booking} />
+                    <p className="text-sm text-gray-500 dark:text-gray-400">{booking.customer_name}</p>
+                  </div>
                 </div>
                 <StatusBadge status={booking.status} />
               </div>

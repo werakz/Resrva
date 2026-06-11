@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { ArrowLeft, Send } from "lucide-react";
 import { Link } from "react-router";
 import { apiFetch, toJsonBody } from "../lib/api";
+import { publicVenuePath } from "../lib/publicVenue";
 import type { MetaPayload } from "../types";
 import {
   FieldLabel,
@@ -99,7 +100,7 @@ export default function PublicFunctionRequest() {
     <main className="min-h-screen bg-[#f5f7f2] px-4 py-6 text-gray-900">
       <div className="mx-auto max-w-4xl">
         <Link
-          to="/"
+          to={publicVenuePath()}
           className="mb-5 inline-flex items-center gap-2 text-sm font-medium text-brand-700 hover:text-brand-800"
         >
           <ArrowLeft className="size-4" />
