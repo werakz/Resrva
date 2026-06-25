@@ -1,6 +1,6 @@
 # Resrva
 
-Resrva is a full-stack restaurant reservation management system built for the Old Canberra Inn assessment scenario. It includes public booking forms, a manager dashboard, table and area management, calendar capacity views, configurable online booking rules, and an AI-assisted customer reply composer.
+Resrva is a full-stack restaurant reservation management system built for the Old Canberra Inn assessment scenario. It includes public booking forms, a manager dashboard, table and area management, calendar capacity views, configurable online booking rules, and manager customer messaging.
 
 ## Stack
 
@@ -31,7 +31,7 @@ This assessment build is designed for local XAMPP deployment.
 - Public function request form for larger/private events.
 - Manager dashboard with today's bookings, guest counts, pending actions, guest volume chart, and upcoming functions.
 - Bookings and functions management with filtering, status updates, table assignment, and customer notification prompts.
-- AI reply composer that drafts customer-facing messages from booking details and manager instructions.
+- Customer message composer for manager-written booking updates.
 - Calendar view showing lunch/dinner capacity based on reservable tables.
 - Table and area management, including reservable/not reservable table status.
 - Settings for venue details, venue image, online booking availability, blocked online dates, booking rules, opening hours, and terms and conditions.
@@ -129,14 +129,10 @@ frontend/            React manager dashboard and public booking forms
 - `docs/system-design.md`
 - `docs/security-risk-register.md`
 - `docs/test-evidence.md`
-- `docs/ai-governance.md`
+- `docs/messaging.md`
 - `docs/submission-checklist.md`
 - `docs/Resrva-assignment-presentation.pptx`
 
-## AI Use Statement
+## Messaging Statement
 
-Resrva includes an AI-assisted reply composer for managers. It uses booking context, status, customer details, and a manager instruction to draft a customer-facing response. If an `OPENAI_API_KEY` is configured in `api/config.php`, the API can use OpenAI for the draft; otherwise it falls back to a local deterministic draft generator.
-
-AI output is not sent automatically. Managers must review the draft before using it, and the system logs the generated reply action for audit evidence.
-
-
+Resrva includes a regular message composer for managers. Staff write the subject and message themselves, and the system stores the message in `email_logs` for auditable local demo evidence.

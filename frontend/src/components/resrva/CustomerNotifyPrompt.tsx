@@ -1,20 +1,20 @@
 import { createPortal } from "react-dom";
-import { Mail, Sparkles } from "lucide-react";
+import { Mail, Send } from "lucide-react";
 import type { Booking } from "../../types";
-import type { ReplyPurpose } from "./AiReplyComposer";
+import type { MessagePurpose } from "./MessageComposer";
 
 export function CustomerNotifyPrompt({
   booking,
   purpose,
   message,
   onDismiss,
-  onDraft,
+  onMessage,
 }: {
   booking: Booking;
-  purpose: ReplyPurpose;
+  purpose: MessagePurpose;
   message: string;
   onDismiss: () => void;
-  onDraft: (booking: Booking, purpose: ReplyPurpose) => void;
+  onMessage: (booking: Booking, purpose: MessagePurpose) => void;
 }) {
   if (typeof document === "undefined") return null;
 
@@ -53,11 +53,11 @@ export function CustomerNotifyPrompt({
           </button>
           <button
             type="button"
-            onClick={() => onDraft(booking, purpose)}
+            onClick={() => onMessage(booking, purpose)}
             className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-brand-600 px-4 text-sm font-medium text-white shadow-theme-xs hover:bg-brand-700"
           >
-            <Sparkles className="size-4" />
-            Draft reply
+            <Send className="size-4" />
+            Send message
           </button>
         </div>
       </div>

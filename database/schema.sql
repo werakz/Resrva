@@ -488,6 +488,7 @@ VALUES
   (1, 'venue_phone', '(02) 6134 6000', NOW()),
   (1, 'venue_email', 'manager@oldcanberrainn.com.au', NOW()),
   (1, 'venue_image_url', '', NOW()),
+  (1, 'brand_color', '#276749', NOW()),
   (1, 'online_table_bookings_enabled', '1', NOW()),
   (1, 'online_function_requests_enabled', '1', NOW()),
   (1, 'auto_assignment_enabled', '1', NOW()),

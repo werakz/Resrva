@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, type CSSProperties } from "react";
 import { ChevronLeft, ChevronRight, LogIn } from "lucide-react";
 import { Link } from "react-router";
 import { apiFetch, toJsonBody } from "../lib/api";
@@ -43,6 +43,10 @@ type Confirmation = {
   email: string;
 };
 
+type PublicBrandStyle = CSSProperties & {
+  "--public-brand-color"?: string;
+};
+
 const initialForm: BookingForm = {
   service: "",
   booking_type_id: "",
@@ -76,6 +80,13 @@ type TimeOption = {
 
 function todayIso() {
   return toIsoDate(new Date());
+}
+
+function publicBrandColor(value?: string | null) {
+  const colour = String(value || "").trim();
+  if (/^#[0-9A-Fa-f]{6}$/.test(colour)) return colour;
+  if (/^[0-9A-Fa-f]{6}$/.test(colour)) return `#${colour}`;
+  return "#276749";
 }
 
 function toIsoDate(date: Date) {
@@ -521,6 +532,12 @@ export default function PublicBooking() {
     selectedEventType?.upcoming_sessions?.find((session) => String(session.id) === form.booking_session_id) || null;
   const venueName = meta?.settings.venue_name || "Old Canberra Inn";
   const venueImageUrl = meta?.settings.venue_image_url || "";
+  const publicBrandStyle = useMemo<PublicBrandStyle>(
+    () => ({
+      "--public-brand-color": publicBrandColor(meta?.settings.brand_color),
+    }),
+    [meta?.settings.brand_color],
+  );
   const blockedOnlineDateSet = useMemo(
     () => new Set((meta?.online_booking_blocks || []).map((block) => block.block_date)),
     [meta],
@@ -929,7 +946,7 @@ export default function PublicBooking() {
   };
 
   return (
-    <main className="public-booking-page">
+    <main className="public-booking-page" style={publicBrandStyle}>
       <header className="public-booking-header">
         <Link to="/signin" className="public-booking-manager">
           <LogIn size={17} />

@@ -620,6 +620,7 @@ function settings_defaults(): array
         'venue_phone' => '(02) 6134 6000',
         'venue_email' => 'manager@oldcanberrainn.com.au',
         'venue_image_url' => '',
+        'brand_color' => '#276749',
         'booking_policy_note' => 'Online bookings are for groups of 8 or more. Smaller groups are welcome to walk in.',
         'booking_terms_and_conditions' => "Bookings are subject to venue availability and confirmation.\n\nPlease arrive on time for your booking. Tables may be released if guests arrive late without contacting the venue.\n\nGuest numbers should be accurate at the time of booking. If your party size changes, please contact the venue before your visit.\n\nSpecial requests are noted but cannot be guaranteed. The venue will do its best to accommodate seating preferences, accessibility needs, allergies, and dietary requirements when notified in advance.\n\nThe venue may contact you using the details provided to confirm, update, or manage your booking.\n\nThe venue may cancel or amend bookings where required due to operational needs, private events, safety requirements, or incorrect booking information.\n\nBy submitting a booking, you agree to these terms and confirm that the details provided are accurate.",
         'online_table_bookings_enabled' => '1',
@@ -2856,278 +2857,27 @@ function create_function_confirmation_email(array $booking, string $managerMessa
     );
 }
 
-function booking_reply_area_label(array $booking): string
-{
-    if ((string) ($booking['booking_type'] ?? '') === 'event') {
-        return (string) ($booking['booking_type_name'] ?? $booking['event_type'] ?? 'the event');
-    }
-
-    if ((string) ($booking['booking_type'] ?? '') === 'table') {
-        if (!empty($booking['table_numbers'])) {
-            return 'table ' . $booking['table_numbers'];
-        }
-
-        return (string) ($booking['assigned_area_name'] ?? $booking['preferred_area_name'] ?? 'your table');
-    }
-
-    return (string) ($booking['assigned_area_names'] ?? $booking['assigned_area_name'] ?? $booking['preferred_area_name'] ?? 'the function area');
-}
-
-function booking_reply_prompt_context(array $booking, string $purpose, string $instructions): string
-{
-    $venueName = venue_display_name();
-    $eventType = (string) ($booking['event_type'] ?? '');
-    $bookingType = (string) ($booking['booking_type'] ?? 'table');
-    $lines = [
-        "Write a warm, concise customer email for {$venueName}.",
-        'Return only JSON with keys subject and body.',
-        'Tone: professional, helpful, friendly, no emojis.',
-        'Transform manager instructions into natural customer-facing wording. Do not copy short notes verbatim.',
-        'Purpose: ' . $purpose,
-        'Booking type: ' . $bookingType,
-        'Reference: ' . (string) ($booking['booking_reference'] ?? ''),
-        'Customer: ' . (string) ($booking['customer_name'] ?? ''),
-        'Status: ' . (string) ($booking['status'] ?? ''),
-        'Date: ' . email_display_date((string) ($booking['booking_date'] ?? '')),
-        'Time: ' . email_display_time((string) ($booking['start_time'] ?? '')) . ' - ' . email_display_time((string) ($booking['end_time'] ?? '')),
-        'Guests: ' . (int) ($booking['guest_count'] ?? 0),
-        'Area/table: ' . booking_reply_area_label($booking),
-    ];
-
-    if ($eventType !== '') {
-        $lines[] = 'Event type: ' . $eventType;
-    }
-    if (!empty($booking['custom_answers_summary'])) {
-        $lines[] = 'Custom answers: ' . str_replace("\n", '; ', (string) $booking['custom_answers_summary']);
-    }
-    if (!empty($booking['notes'])) {
-        $lines[] = 'Guest notes: ' . (string) $booking['notes'];
-    }
-    if (!empty($booking['staff_notes'])) {
-        $lines[] = 'Internal staff notes, use only if customer-safe: ' . (string) $booking['staff_notes'];
-    }
-    if ($instructions !== '') {
-        $lines[] = 'Manager instructions: ' . $instructions;
-    }
-
-    return implode("\n", $lines);
-}
-
-function openai_booking_reply_draft(array $booking, string $purpose, string $instructions): ?array
-{
-    global $config;
-
-    $apiKey = (string) ($config['ai']['openai_api_key'] ?? '');
-    if ($apiKey === '' || !function_exists('curl_init')) {
-        return null;
-    }
-
-    $model = (string) ($config['ai']['openai_model'] ?? 'gpt-4o-mini');
-    $payload = [
-        'model' => $model,
-        'messages' => [
-            [
-                'role' => 'system',
-                'content' => 'You draft concise hospitality booking emails. Return strict JSON only.',
-            ],
-            [
-                'role' => 'user',
-                'content' => booking_reply_prompt_context($booking, $purpose, $instructions),
-            ],
-        ],
-        'temperature' => 0.4,
-    ];
-
-    $ch = curl_init('https://api.openai.com/v1/chat/completions');
-    curl_setopt_array($ch, [
-        CURLOPT_RETURNTRANSFER => true,
-        CURLOPT_POST => true,
-        CURLOPT_HTTPHEADER => [
-            'Content-Type: application/json',
-            'Authorization: Bearer ' . $apiKey,
-        ],
-        CURLOPT_POSTFIELDS => json_encode($payload, JSON_UNESCAPED_SLASHES),
-        CURLOPT_TIMEOUT => 12,
-    ]);
-
-    $response = curl_exec($ch);
-    $statusCode = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
-    curl_close($ch);
-
-    if (!is_string($response) || $statusCode < 200 || $statusCode >= 300) {
-        return null;
-    }
-
-    $decoded = json_decode($response, true);
-    $content = $decoded['choices'][0]['message']['content'] ?? '';
-    $draft = is_string($content) ? json_decode($content, true) : null;
-
-    if (!is_array($draft) || empty($draft['subject']) || empty($draft['body'])) {
-        return null;
-    }
-
-    return [
-        'subject' => clean_string($draft['subject']),
-        'body' => clean_string($draft['body']),
-        'provider' => 'openai',
-        'model' => $model,
-    ];
-}
-
-function local_reply_instruction_sentences(string $instructions): array
-{
-    $instructions = clean_string($instructions);
-    if ($instructions === '') {
-        return [];
-    }
-
-    $text = strtolower($instructions);
-    $sentences = [];
-
-    if (preg_match('/diet|allerg|vegan|vegetarian|gluten|coeliac|celiac/', $text)) {
-        $sentences[] = 'Please let us know if anyone in your group has dietary requirements or allergies.';
-    }
-    if (preg_match('/deposit|payment|prepay|pre-pay/', $text)) {
-        $sentences[] = 'Please note that a deposit or pre-payment may be required to secure the booking.';
-    }
-    if (preg_match('/cake|birthday cake/', $text)) {
-        $sentences[] = 'If you are bringing a cake, please let us know so the team can prepare accordingly.';
-    }
-    if (preg_match('/pre.?order|set menu|menu/', $text)) {
-        $sentences[] = 'If you would like to discuss menu options or pre-orders, please reply and our team can help.';
-    }
-    if (preg_match('/arrival|arrive|early/', $text)) {
-        $sentences[] = 'Please arrive a little before your booking time so we can get everyone settled comfortably.';
-    }
-    if (preg_match('/access|wheelchair|mobility|pram/', $text)) {
-        $sentences[] = 'Please let us know if anyone in your group has accessibility needs so we can plan the best setup.';
-    }
-    if (preg_match('/children|kids|high chair|highchair/', $text)) {
-        $sentences[] = 'Please let us know if you need high chairs or space for children in the booking setup.';
-    }
-    if (preg_match('/parking/', $text)) {
-        $sentences[] = 'Please allow a little extra time for parking, especially during busy service periods.';
-    }
-
-    if ($sentences !== []) {
-        return array_values(array_unique($sentences));
-    }
-
-    $cleaned = preg_replace('/^(please\s+)?(mention|include|add|ask|tell|say|note)\s+(that\s+|about\s+)?/i', '', $instructions);
-    $cleaned = clean_string($cleaned);
-    if ($cleaned === '') {
-        return [];
-    }
-
-    $sentence = strtoupper(substr($cleaned, 0, 1)) . substr($cleaned, 1);
-    if (!preg_match('/[.!?]$/', $sentence)) {
-        $sentence .= '.';
-    }
-
-    return [$sentence];
-}
-
-function local_booking_reply_draft(array $booking, string $purpose, string $instructions): array
-{
-    $venueName = venue_display_name();
-    $name = (string) ($booking['customer_name'] ?? 'there');
-    $reference = (string) ($booking['booking_reference'] ?? '');
-    $bookingType = (string) ($booking['booking_type'] ?? 'table');
-    $status = (string) ($booking['status'] ?? 'confirmed');
-    $date = email_display_date((string) ($booking['booking_date'] ?? ''));
-    $startTime = email_display_time((string) ($booking['start_time'] ?? ''));
-    $endTime = email_display_time((string) ($booking['end_time'] ?? ''));
-    $guests = (int) ($booking['guest_count'] ?? 0);
-    $area = booking_reply_area_label($booking);
-    $eventType = clean_string($booking['event_type'] ?? '');
-    $kind = match ($bookingType) {
-        'function' => $eventType !== '' ? strtolower($eventType) . ' function' : 'function',
-        'event' => clean_string($booking['booking_type_name'] ?? '') !== ''
-            ? strtolower((string) $booking['booking_type_name'])
-            : ($eventType !== '' ? strtolower($eventType) : 'event booking'),
-        default => 'table booking',
-    };
-
-    $subject = match ($purpose) {
-        'decline' => "{$venueName} booking {$reference} update",
-        'request_info' => "A quick question about your {$venueName} booking {$reference}",
-        'update' => "{$venueName} booking {$reference} update",
-        default => "{$venueName} booking {$reference} confirmation",
-    };
-
-    $opening = match ($purpose) {
-        'decline' => "Thanks for your {$kind} enquiry. Unfortunately, we are unable to accommodate this booking as requested.",
-        'request_info' => "Thanks for your {$kind} enquiry. We just need a little more information before we can finalise it.",
-        'update' => "I am writing with an update for your {$kind} at {$venueName}.",
-        default => "Your {$kind} at {$venueName} is {$status}.",
-    };
-
-    $body = "Hi {$name},\n\n";
-    $body .= "{$opening}\n\n";
-
-    $instructionSentences = local_reply_instruction_sentences($instructions);
-    if ($instructionSentences !== []) {
-        $body .= implode("\n", $instructionSentences) . "\n\n";
-    }
-
-    $body .= "Booking details:\n";
-    $body .= "Reference: {$reference}\n";
-    $body .= "Date: {$date}\n";
-    $body .= "Time: {$startTime} - {$endTime}\n";
-    $body .= "Guests: {$guests}\n";
-    $body .= ($bookingType === 'table' ? 'Table/area: ' : ($bookingType === 'event' ? 'Event: ' : 'Area(s): ')) . "{$area}\n";
-    $body .= "\nKind regards,\n{$venueName}";
-
-    return [
-        'subject' => $subject,
-        'body' => $body,
-        'provider' => 'local_ai',
-        'model' => 'resrva-reply-drafter',
-    ];
-}
-
-function generate_booking_reply_draft(int $bookingId, array $data, array $manager): array
+function send_booking_message(int $bookingId, array $data, array $manager): array
 {
     $booking = fetch_booking($bookingId);
     if (!$booking) {
         fail('Booking not found.', 404);
     }
 
-    $purpose = clean_string($data['purpose'] ?? 'confirm');
-    if (!in_array($purpose, ['confirm', 'update', 'decline', 'request_info'], true)) {
-        fail('Please choose a valid reply type.', 422, ['purpose' => $purpose]);
-    }
-
-    $instructions = clean_string($data['instructions'] ?? '');
-    $draft = openai_booking_reply_draft($booking, $purpose, $instructions)
-        ?? local_booking_reply_draft($booking, $purpose, $instructions);
-
-    log_activity((int) $manager['id'], 'drafted_ai_reply', 'booking', $bookingId, [
-        'purpose' => $purpose,
-        'provider' => $draft['provider'],
-    ]);
-
-    return [
-        'subject' => $draft['subject'],
-        'body' => $draft['body'],
-        'provider' => $draft['provider'],
-        'model' => $draft['model'],
-    ];
-}
-
-function log_ai_reply_email(int $bookingId, array $data, array $manager): array
-{
-    $booking = fetch_booking($bookingId);
-    if (!$booking) {
-        fail('Booking not found.', 404);
+    $recipient = (string) ($booking['customer_email'] ?? '');
+    if ($recipient === '') {
+        fail('This booking does not have a customer email address.', 422);
     }
 
     $subject = clean_string($data['subject'] ?? '');
     $body = clean_string($data['body'] ?? '');
     require_fields(['subject' => $subject, 'body' => $body], ['subject', 'body']);
 
-    $emailLogId = create_email_log($bookingId, (string) $booking['customer_email'], $subject, $body);
-    log_activity((int) $manager['id'], 'logged_ai_reply', 'booking', $bookingId, ['email_log_id' => $emailLogId]);
+    $emailLogId = create_email_log($bookingId, $recipient, $subject, $body);
+    log_activity((int) $manager['id'], 'sent_message', 'booking', $bookingId, [
+        'email_log_id' => $emailLogId,
+        'recipient' => $recipient,
+    ]);
 
     return ['ok' => true, 'email_log_id' => $emailLogId];
 }
@@ -3159,6 +2909,37 @@ function overlapping_table_ids(string $date, string $startTime, string $endTime,
     $stmt->execute($params);
 
     return array_map('intval', array_column($stmt->fetchAll(), 'table_id'));
+}
+
+function overlapping_table_assignments(array $tableIds, string $date, string $startTime, string $endTime, ?int $excludeBookingId = null): array
+{
+    $tableIds = normalized_table_ids($tableIds);
+    if ($tableIds === []) {
+        return [];
+    }
+
+    $tablePlaceholders = implode(',', array_fill(0, count($tableIds), '?'));
+    $sql =
+        'SELECT DISTINCT bt.table_id, bt.booking_id
+         FROM booking_tables bt
+         JOIN bookings b ON b.id = bt.booking_id
+         WHERE b.venue_id = ?
+           AND b.booking_date = ?
+           AND b.status NOT IN ("cancelled", "no_show", "declined", "waitlist")
+           AND b.start_time < ?
+           AND b.end_time > ?';
+    $params = [current_venue_id(), $date, $endTime, $startTime];
+
+    if ($excludeBookingId !== null) {
+        $sql .= ' AND b.id <> ?';
+        $params[] = $excludeBookingId;
+    }
+
+    $sql .= " AND bt.table_id IN ({$tablePlaceholders}) ORDER BY bt.booking_id, bt.table_id";
+    $stmt = db()->prepare($sql);
+    $stmt->execute(array_merge($params, $tableIds));
+
+    return $stmt->fetchAll();
 }
 
 function blocked_function_area_ids(string $date, string $startTime, string $endTime, ?int $excludeBookingId = null): array
@@ -3830,10 +3611,12 @@ function manual_table_assignment(
     string $endTime,
     ?int $excludeBookingId = null,
     array $allowedAreaIds = [],
-    ?int $excludeEventSessionId = null
+    ?int $excludeEventSessionId = null,
+    array $reassignTableIds = []
 ): array
 {
     $tableIds = normalized_table_ids($tableIds);
+    $reassignTableIds = array_values(array_intersect(normalized_table_ids($reassignTableIds), $tableIds));
     if ($tableIds === []) {
         fail('Please select at least one table.', 422);
     }
@@ -3877,8 +3660,9 @@ function manual_table_assignment(
 
     $unavailableIds = overlapping_table_ids($date, $startTime, $endTime, $excludeBookingId);
     $clashingIds = array_values(array_intersect($tableIds, $unavailableIds));
-    if ($clashingIds !== []) {
-        fail('One or more selected tables are already booked for that time.', 409, ['table_ids' => $clashingIds]);
+    $unapprovedClashingIds = array_values(array_diff($clashingIds, $reassignTableIds));
+    if ($unapprovedClashingIds !== []) {
+        fail('One or more selected tables are already booked for that time.', 409, ['table_ids' => $unapprovedClashingIds]);
     }
 
     $capacity = array_sum(array_map(fn (array $table) => (int) $table['capacity'], $tables));
@@ -3897,6 +3681,7 @@ function manual_table_assignment(
         'area_name' => $areaName,
         'table_ids' => $tableIds,
         'table_numbers' => $numbers,
+        'reassign_table_ids' => array_values(array_intersect($reassignTableIds, $clashingIds)),
         'capacity' => $capacity,
         'explanation' => 'Manager selected ' . $areaName . ' table(s) ' . implode(', ', $numbers) . '.',
         'rules_snapshot' => [
@@ -3914,6 +3699,90 @@ function attach_tables_to_booking(int $bookingId, array $tableIds): void
 
     foreach ($tableIds as $tableId) {
         $insert->execute(['booking_id' => $bookingId, 'table_id' => (int) $tableId]);
+    }
+}
+
+function move_reassigned_tables_to_booking(
+    int $targetBookingId,
+    array $tableIds,
+    string $date,
+    string $startTime,
+    string $endTime,
+    array $manager
+): void
+{
+    $tableIds = normalized_table_ids($tableIds);
+    if ($tableIds === []) {
+        return;
+    }
+
+    $assignments = overlapping_table_assignments($tableIds, $date, $startTime, $endTime, $targetBookingId);
+    if ($assignments === []) {
+        return;
+    }
+
+    $tablesByBooking = [];
+    foreach ($assignments as $assignment) {
+        $sourceBookingId = (int) $assignment['booking_id'];
+        if (!isset($tablesByBooking[$sourceBookingId])) {
+            $tablesByBooking[$sourceBookingId] = [];
+        }
+        $tablesByBooking[$sourceBookingId][] = (int) $assignment['table_id'];
+    }
+
+    foreach ($tablesByBooking as $sourceBookingId => $sourceTableIds) {
+        $before = fetch_booking((int) $sourceBookingId);
+        if (!$before) {
+            continue;
+        }
+
+        $sourceTableIds = normalized_table_ids($sourceTableIds);
+        if ($sourceTableIds === []) {
+            continue;
+        }
+
+        $placeholders = implode(',', array_fill(0, count($sourceTableIds), '?'));
+        $delete = db()->prepare("DELETE FROM booking_tables WHERE booking_id = ? AND table_id IN ({$placeholders})");
+        $delete->execute(array_merge([(int) $sourceBookingId], $sourceTableIds));
+
+        $remainingTableCount = (int) scalar_query(
+            'SELECT COUNT(*) FROM booking_tables WHERE booking_id = ?',
+            [(int) $sourceBookingId]
+        );
+
+        if ($remainingTableCount === 0) {
+            db()->prepare(
+                'UPDATE bookings
+                 SET assigned_area_id = NULL, updated_by_user_id = :updated_by_user_id, updated_at = NOW()
+                 WHERE id = :id AND venue_id = :venue_id'
+            )->execute([
+                'id' => (int) $sourceBookingId,
+                'venue_id' => current_venue_id($manager),
+                'updated_by_user_id' => (int) $manager['id'],
+            ]);
+        } else {
+            db()->prepare(
+                'UPDATE bookings
+                 SET updated_by_user_id = :updated_by_user_id, updated_at = NOW()
+                 WHERE id = :id AND venue_id = :venue_id'
+            )->execute([
+                'id' => (int) $sourceBookingId,
+                'venue_id' => current_venue_id($manager),
+                'updated_by_user_id' => (int) $manager['id'],
+            ]);
+        }
+
+        $after = fetch_booking((int) $sourceBookingId);
+        $changes = $after ? booking_update_change_summaries($before, $after) : [];
+        if ($changes === []) {
+            continue;
+        }
+
+        log_activity((int) $manager['id'], 'updated', 'booking', (int) $sourceBookingId, [
+            'changes' => $changes,
+            'change_summary' => implode('; ', $changes),
+            'reassigned_to_booking_id' => $targetBookingId,
+        ]);
     }
 }
 
@@ -4137,7 +4006,9 @@ function create_table_booking(array $data, ?array $manager = null): array
             $startTime,
             $endTime,
             null,
-            $eventAllowedAreaIds
+            $eventAllowedAreaIds,
+            null,
+            normalized_table_ids($data['reassign_table_ids'] ?? [])
         );
         $assignedAreaId = $recommendation['area_id'] ?? null;
     } elseif ($manager && $recordType === 'function') {
@@ -4189,6 +4060,16 @@ function create_table_booking(array $data, ?array $manager = null): array
 
     $bookingId = (int) db()->lastInsertId();
     if ($recommendation !== null) {
+        if ($manager !== null) {
+            move_reassigned_tables_to_booking(
+                $bookingId,
+                $recommendation['reassign_table_ids'] ?? [],
+                $date,
+                $startTime,
+                $endTime,
+                $manager
+            );
+        }
         attach_tables_to_booking($bookingId, $recommendation['table_ids']);
         log_ai_assignment($bookingId, $recommendation, $manager['id'] ?? null, $manager !== null);
     } elseif ($recordType === 'function') {
@@ -4793,7 +4674,8 @@ function update_booking(int $bookingId, array $data, array $manager): array
                 $endTime,
                 $bookingId,
                 $eventAllowedAreaIds,
-                $eventSessionId
+                $eventSessionId,
+                normalized_table_ids($data['reassign_table_ids'] ?? [])
             );
             $assignedAreaId = (int) $manualRecommendation['area_id'];
         } elseif ($nextBookingType === 'event') {
@@ -4923,6 +4805,14 @@ function update_booking(int $bookingId, array $data, array $manager): array
         attach_tables_to_booking($bookingId, $recommendation['table_ids']);
         log_ai_assignment($bookingId, $recommendation, (int) $manager['id'], false);
     } elseif ($manualRecommendation !== null) {
+        move_reassigned_tables_to_booking(
+            $bookingId,
+            $manualRecommendation['reassign_table_ids'] ?? [],
+            $bookingDate,
+            $startTime,
+            $endTime,
+            $manager
+        );
         attach_tables_to_booking($bookingId, $manualRecommendation['table_ids']);
         log_ai_assignment($bookingId, $manualRecommendation, (int) $manager['id'], true);
     } elseif ($clearManualTables || $nextBookingType === 'function') {
@@ -6541,14 +6431,9 @@ try {
         respond($result);
     }
 
-    if (($segments[0] ?? '') === 'bookings' && isset($segments[1], $segments[2]) && $segments[2] === 'reply-draft' && $method === 'POST') {
+    if (($segments[0] ?? '') === 'bookings' && isset($segments[1], $segments[2]) && $segments[2] === 'message' && $method === 'POST') {
         $manager = require_manager();
-        respond(generate_booking_reply_draft((int) $segments[1], json_body(), $manager));
-    }
-
-    if (($segments[0] ?? '') === 'bookings' && isset($segments[1], $segments[2]) && $segments[2] === 'reply-log' && $method === 'POST') {
-        $manager = require_manager();
-        respond(log_ai_reply_email((int) $segments[1], json_body(), $manager), 201);
+        respond(send_booking_message((int) $segments[1], json_body(), $manager), 201);
     }
 
     if (($segments[0] ?? '') === 'bookings' && isset($segments[1]) && $method === 'PUT') {

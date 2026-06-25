@@ -12,10 +12,6 @@ Manager browser
   -> React manager dashboard
   -> PHP API with session authentication
   -> MySQL database
-
-Optional AI reply composer
-  -> OpenAI Chat Completions API when OPENAI_API_KEY is configured
-  -> Local deterministic fallback when no API key is configured
 ```
 
 ## Main Modules
@@ -29,7 +25,7 @@ Optional AI reply composer
 - Tables/areas module: stores area records, table numbers, capacities, and reservable status.
 - Settings module: stores venue details, venue image, booking rules, blocked online dates, opening hours, and terms.
 - Users/profile module: manages manager accounts, status, passwords, and avatar uploads.
-- AI reply composer: drafts customer-facing replies from booking context and manager instructions.
+- Customer message composer: lets managers write customer-facing booking updates.
 - Audit/email logs: stores simulated email history and activity evidence for the local demo.
 
 ## ERD Summary
@@ -65,7 +61,7 @@ online_booking_blocks
   dates where public online bookings are turned off
 
 activity_logs
-  audit record for sign-in, create, update, delete, settings, and AI reply actions
+  audit record for sign-in, create, update, delete, settings, and message actions
 ```
 
 ## Important Tables
@@ -80,7 +76,7 @@ activity_logs
 | `booking_tables` | Many-to-many assigned table links. |
 | `booking_function_areas` | Many-to-many function area links. |
 | `ai_assignment_logs` | Rule-based table assignment recommendations and manager overrides. |
-| `email_logs` | Simulated outgoing email and AI reply evidence. |
+| `email_logs` | Simulated outgoing email and customer message evidence. |
 | `activity_logs` | Audit history for manager actions. |
 | `settings` | Booking rules, venue details, terms, online booking controls. |
 | `opening_hours` | Daily venue opening/closing validation. |
@@ -100,8 +96,7 @@ activity_logs
 | GET | `bookings` | Manager | Paginated table/function booking list. |
 | POST | `bookings` | Manager | Create manual table booking. |
 | PUT | `bookings/{id}` | Manager | Update booking details, status, tables, or notification prompt. |
-| POST | `bookings/{id}/reply-draft` | Manager | Generate AI-assisted customer reply draft. |
-| POST | `bookings/{id}/reply-log` | Manager | Save reviewed reply to email log. |
+| POST | `bookings/{id}/message` | Manager | Save/send a manager-written customer message to email log. |
 | GET | `functions` | Manager | Paginated function list. |
 | POST | `functions` | Manager | Create manager function booking. |
 | PUT | `functions/{id}` | Manager | Update function request/booking. |

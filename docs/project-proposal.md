@@ -31,7 +31,7 @@ Resrva solves this by providing one full-stack application where customers can s
 - Tables and areas administration with add/edit/delete controls and reservable/not reservable status.
 - Settings for venue details, venue image, online booking availability, advance notice, opening hours, blocked dates, and terms and conditions.
 - Manager user management and profile/avatar editing.
-- AI-assisted reply composer that drafts customer-facing messages from booking context and manager instructions.
+- Manager-written customer message composer with logged communication history.
 - Server-side validation, PDO prepared statements, session authentication, upload validation, and audit/email logs.
 
 ## Technology Stack
@@ -42,7 +42,7 @@ Resrva solves this by providing one full-stack application where customers can s
 | UI | Tailwind CSS and TailAdmin-style components | Provides a clean admin dashboard style with responsive form controls and cards. |
 | Backend | PHP 8 with PDO | Fits the XAMPP requirement and keeps the API easy to run locally. |
 | Database | MySQL | Stores users, bookings, customers, tables, areas, settings, logs, and opening hours. |
-| AI | Optional OpenAI Chat Completions API with local fallback | Allows an AI feature while keeping the demo usable without external credentials. |
+| Messaging | Manager-written customer messages logged by the PHP API | Keeps customer communication auditable in the local demo. |
 | Runtime | XAMPP or PHP built-in server plus Vite | Matches classroom/demo deployment expectations. |
 
 ## Team Roles
@@ -57,8 +57,8 @@ Full Stack Development
 | 2. Database and API foundation | Create MySQL schema, PHP config, session login, and core API helpers. |
 | 3. Public booking experience | Build table booking, function request, booking terms, and venue image support. |
 | 4. Manager operations | Build dashboard, bookings, functions, calendar, table/area management, settings, and users. |
-| 5. AI feature and governance | Add AI reply composer, prompt controls, fallback generator, review step, and logging. |
-| 6. Testing and documentation | Run build checks, document test cases, update risk register, system design, and AI appendix. |
+| 5. Customer messaging | Add manager-written customer messages, status prompts, and communication logging. |
+| 6. Testing and documentation | Run build checks, document test cases, update risk register, system design, and messaging notes. |
 | 7. Final submission | Clean repository, confirm README setup steps, include SQL schema, and prepare presentation/demo. |
 
 ## Success Criteria
@@ -66,5 +66,5 @@ Full Stack Development
 - A manager can run the app locally, sign in, and manage bookings/functions.
 - Customers can submit table bookings and function requests through public pages.
 - The database schema can be imported from `database/schema.sql`.
-- The documentation pack covers proposal, system design, security risks, test evidence, and AI governance.
-- The AI feature is human-reviewed and does not send messages automatically.
+- The documentation pack covers proposal, system design, security risks, test evidence, and messaging behavior.
+- Customer messages are written by managers and recorded in the email log for audit evidence.

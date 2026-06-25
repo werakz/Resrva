@@ -4,8 +4,7 @@
 | SQL injection through forms, filters, or IDs | Data leakage, booking tampering, or database corruption | Backend database access uses PHP PDO prepared statements, typed parameters, and server-side validation before SQL execution. |
 | Unauthorised dashboard access | Customer data, settings, and manager tools could be exposed | Manager routes require an authenticated session and active manager account. Passwords are stored with `password_hash` and verified with `password_verify`. |
 | Invalid booking data or double booking | Operational conflict, incorrect capacity, or poor customer experience | Server-side validation checks dates, times, guest limits, opening hours, blocked dates, overlapping bookings, and function area clashes. |
-| AI reply contains incorrect, unsafe, or misleading wording | Customer confusion, reputational risk, or unapproved promises | AI output is a draft only. Managers must review/edit before logging. The prompt instructs concise hospitality wording and the local fallback uses controlled templates. |
-| Sensitive customer data sent to external AI | Privacy risk if OpenAI is configured | OpenAI use is optional and controlled by `OPENAI_API_KEY`. The app still works with a local deterministic fallback. Only booking context needed for the reply is sent, and replies are reviewed by managers before use. |
+| Manager message contains incorrect, unsafe, or misleading wording | Customer confusion, reputational risk, or unapproved promises | Messages are written manually by authenticated staff and logged for review/audit. |
 
 ## Additional Controls
 

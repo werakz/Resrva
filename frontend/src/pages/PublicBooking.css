@@ -1,4 +1,8 @@
 .public-booking-page {
+  --public-brand-color: #276749;
+  --public-brand-hover: color-mix(in srgb, var(--public-brand-color) 86%, black);
+  --public-brand-soft: color-mix(in srgb, var(--public-brand-color) 12%, white);
+  --public-brand-ring: color-mix(in srgb, var(--public-brand-color) 16%, transparent);
   min-height: 100vh;
   overflow-x: hidden;
   background: #f9fafb;
@@ -36,9 +40,9 @@
 }
 
 .public-booking-manager:hover {
-  border-color: #276749;
+  border-color: var(--public-brand-color);
   background: #f9fafb;
-  color: #276749;
+  color: var(--public-brand-color);
 }
 
 .public-booking-logo {
@@ -107,13 +111,13 @@
 }
 
 .public-booking-step-number.is-active {
-  background: #276749;
+  background: var(--public-brand-color);
   color: #fff;
 }
 
 .public-booking-step-number.is-done {
-  background: #dff6e8;
-  color: #276749;
+  background: var(--public-brand-soft);
+  color: var(--public-brand-color);
 }
 
 .public-booking-step-label {
@@ -160,7 +164,7 @@
 }
 
 .public-booking-date-strip {
-  background: #276749;
+  background: var(--public-brand-color);
   padding: 20px;
   color: #fff;
 }
@@ -207,7 +211,7 @@
 .public-booking-month-button:hover {
   border-color: #e5e7eb;
   background: #f9fafb;
-  color: #276749;
+  color: var(--public-brand-color);
 }
 
 .public-booking-month-button svg {
@@ -261,11 +265,11 @@
 }
 
 .public-booking-day.is-today {
-  color: #276749;
+  color: var(--public-brand-color);
 }
 
 .public-booking-day.is-selected {
-  background: #276749;
+  background: var(--public-brand-color);
   box-shadow: var(--shadow-theme-xs);
   color: #fff;
   font-weight: 700;
@@ -341,8 +345,8 @@
 }
 
 .public-booking-guest-input:focus {
-  border-color: #276749;
-  box-shadow: 0 0 0 3px rgba(39, 103, 73, 0.12);
+  border-color: var(--public-brand-color);
+  box-shadow: 0 0 0 3px var(--public-brand-ring);
 }
 
 .public-booking-round-button {
@@ -353,14 +357,14 @@
   justify-content: center;
   border: 0;
   border-radius: 8px;
-  background: #276749;
+  background: var(--public-brand-color);
   box-shadow: var(--shadow-theme-xs);
   color: #fff;
   transition: background 0.15s ease, transform 0.15s ease;
 }
 
 .public-booking-round-button:hover {
-  background: #22543d;
+  background: var(--public-brand-hover);
 }
 
 .public-booking-round-button:active {
@@ -401,13 +405,13 @@
 }
 
 .public-booking-service:hover:not(:disabled) {
-  border-color: var(--booking-type-colour, #276749);
-  color: var(--booking-type-colour, #276749);
+  border-color: var(--booking-type-colour, var(--public-brand-color));
+  color: var(--booking-type-colour, var(--public-brand-color));
 }
 
 .public-booking-service.is-selected {
-  border-color: var(--booking-type-colour, #276749);
-  background: var(--booking-type-colour, #276749);
+  border-color: var(--booking-type-colour, var(--public-brand-color));
+  background: var(--booking-type-colour, var(--public-brand-color));
   color: #fff;
 }
 
@@ -433,9 +437,9 @@
 .public-booking-time-heading span {
   flex: 0 0 auto;
   border-radius: 999px;
-  background: #e8f7ef;
+  background: var(--public-brand-soft);
   padding: 4px 10px;
-  color: #276749;
+  color: var(--public-brand-color);
   font-size: 12px;
   font-weight: 600;
 }
@@ -457,8 +461,8 @@
 }
 
 .public-booking-time-select:focus {
-  border-color: #276749;
-  box-shadow: 0 0 0 3px rgba(39, 103, 73, 0.12);
+  border-color: var(--public-brand-color);
+  box-shadow: 0 0 0 3px var(--public-brand-ring);
 }
 
 .public-booking-time-select:disabled {
@@ -511,13 +515,13 @@
 }
 
 .public-booking-session:hover {
-  border-color: var(--booking-type-colour, #276749);
+  border-color: var(--booking-type-colour, var(--public-brand-color));
 }
 
 .public-booking-session.is-selected {
-  border-color: var(--booking-type-colour, #276749);
-  background: color-mix(in srgb, var(--booking-type-colour, #276749) 12%, white);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--booking-type-colour, #276749) 16%, transparent);
+  border-color: var(--booking-type-colour, var(--public-brand-color));
+  background: color-mix(in srgb, var(--booking-type-colour, var(--public-brand-color)) 12%, white);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--booking-type-colour, var(--public-brand-color)) 16%, transparent);
 }
 
 .public-booking-session strong {
@@ -537,7 +541,7 @@
 
 .public-booking-session em {
   flex: 0 0 auto;
-  color: var(--booking-type-colour, #276749);
+  color: var(--booking-type-colour, var(--public-brand-color));
   font-size: 12px;
   font-style: normal;
   font-weight: 700;
@@ -630,8 +634,8 @@
 
 .public-booking-line-input:focus,
 .public-booking-notes-line:focus {
-  border-color: #276749;
-  box-shadow: 0 0 0 3px rgba(39, 103, 73, 0.12);
+  border-color: var(--public-brand-color);
+  box-shadow: 0 0 0 3px var(--public-brand-ring);
 }
 
 .public-booking-phone-line {
@@ -648,8 +652,8 @@
 }
 
 .public-booking-phone-line:focus-within {
-  border-color: #276749;
-  box-shadow: 0 0 0 3px rgba(39, 103, 73, 0.12);
+  border-color: var(--public-brand-color);
+  box-shadow: 0 0 0 3px var(--public-brand-ring);
 }
 
 .public-booking-phone-line .public-booking-line-input {
@@ -701,7 +705,7 @@
 }
 
 .public-booking-checkbox-row a {
-  color: #276749;
+  color: var(--public-brand-color);
   font-weight: 500;
   text-decoration: none;
 }
@@ -715,7 +719,7 @@
   height: 16px;
   flex: 0 0 16px;
   margin-top: 2px;
-  accent-color: #276749;
+  accent-color: var(--public-brand-color);
 }
 
 .public-booking-fields {
@@ -761,8 +765,8 @@
 
 .public-booking-input:focus,
 .public-booking-textarea:focus {
-  border-color: #276749;
-  box-shadow: 0 0 0 3px rgba(39, 103, 73, 0.12);
+  border-color: var(--public-brand-color);
+  box-shadow: 0 0 0 3px var(--public-brand-ring);
 }
 
 .public-booking-areas {
@@ -782,8 +786,8 @@
 }
 
 .public-booking-area.is-selected {
-  border-color: #276749;
-  background: #276749;
+  border-color: var(--public-brand-color);
+  background: var(--public-brand-color);
   color: #fff;
 }
 
@@ -825,8 +829,8 @@
   align-items: center;
   justify-content: center;
   border-radius: 999px;
-  background: #dff6e8;
-  color: #276749;
+  background: var(--public-brand-soft);
+  color: var(--public-brand-color);
   font-size: 15px;
   font-weight: 700;
 }
@@ -873,7 +877,7 @@
   height: 40px;
   border: 0;
   border-radius: 8px;
-  background: #276749;
+  background: var(--public-brand-color);
   padding: 0 18px;
   box-shadow: var(--shadow-theme-xs);
   color: #fff;
@@ -882,7 +886,7 @@
 }
 
 .public-booking-confirmation-button:hover {
-  background: #22543d;
+  background: var(--public-brand-hover);
 }
 
 .public-booking-message {
@@ -925,12 +929,12 @@
 }
 
 .public-booking-next {
-  background: #276749;
+  background: var(--public-brand-color);
   color: #fff;
 }
 
 .public-booking-next:hover {
-  background: #22543d;
+  background: var(--public-brand-hover);
 }
 
 .public-booking-next:disabled {

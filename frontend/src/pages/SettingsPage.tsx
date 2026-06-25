@@ -22,6 +22,7 @@ const defaultSettings: Record<string, string> = {
   venue_phone: "(02) 6134 6000",
   venue_email: "manager@oldcanberrainn.com.au",
   venue_image_url: "",
+  brand_color: "#276749",
   booking_policy_note: "Online bookings are for groups of 8 or more. Smaller groups are welcome to walk in.",
   booking_terms_and_conditions:
     "Bookings are subject to venue availability and confirmation.\n\nPlease arrive on time for your booking. Tables may be released if guests arrive late without contacting the venue.\n\nGuest numbers should be accurate at the time of booking. If your party size changes, please contact the venue before your visit.\n\nSpecial requests are noted but cannot be guaranteed. The venue will do its best to accommodate seating preferences, accessibility needs, allergies, and dietary requirements when notified in advance.\n\nThe venue may contact you using the details provided to confirm, update, or manage your booking.\n\nThe venue may cancel or amend bookings where required due to operational needs, private events, safety requirements, or incorrect booking information.\n\nBy submitting a booking, you agree to these terms and confirm that the details provided are accurate.",
@@ -80,6 +81,17 @@ function closedDatesDisplay(value: string): string {
   const dates = parseClosedMonthDays(value);
 
   return dates.length > 0 ? dates.map(closedDateLabel).join(", ") : "No annual closed dates";
+}
+
+function normalizeHexColor(value: string): string {
+  const color = value.trim();
+  if (/^#[0-9a-fA-F]{6}$/.test(color)) return color.toUpperCase();
+  if (/^[0-9a-fA-F]{6}$/.test(color)) return `#${color.toUpperCase()}`;
+  return color;
+}
+
+function isHexColor(value: string): boolean {
+  return /^#[0-9a-fA-F]{6}$/.test(value.trim());
 }
 
 function blockedDateLabel(value: string): string {
@@ -297,9 +309,16 @@ export default function SettingsPage() {
   };
 
   const saveSettings = async () => {
+    const brandColor = normalizeHexColor(settingValue("brand_color"));
+    if (!isHexColor(brandColor)) {
+      setMessage({ type: "error", text: "Brand color must be a valid hex color." });
+      return;
+    }
+
+    const nextSettings = { ...settings, brand_color: brandColor };
     await apiFetch<{ ok: boolean }>("settings", {
       method: "PUT",
-      ...toJsonBody({ settings, opening_hours: openingHours }),
+      ...toJsonBody({ settings: nextSettings, opening_hours: openingHours }),
     });
     setMessage({ type: "success", text: "Settings saved." });
     await loadSettings();
@@ -372,6 +391,27 @@ export default function SettingsPage() {
         <div className="sm:col-span-2">
           <FieldLabel htmlFor="venue-email">Email</FieldLabel>
           <input id="venue-email" type="email" className={inputClass} value={settingValue("venue_email")} onChange={(event) => updateSetting("venue_email", event.target.value)} />
+        </div>
+        <div className="sm:col-span-2">
+          <FieldLabel htmlFor="brand-color">Brand color</FieldLabel>
+          <div className="grid gap-3 sm:grid-cols-[72px_1fr]">
+            <input
+              id="brand-color"
+              type="color"
+              className="h-11 w-full cursor-pointer rounded-lg border border-gray-300 bg-white p-1 shadow-theme-xs dark:border-gray-700 dark:bg-gray-900"
+              value={isHexColor(settingValue("brand_color")) ? settingValue("brand_color") : defaultSettings.brand_color}
+              onChange={(event) => updateSetting("brand_color", event.target.value.toUpperCase())}
+              aria-label="Brand color"
+            />
+            <input
+              id="brand-color-hex"
+              className={inputClass}
+              aria-label="Brand color hex"
+              value={settingValue("brand_color")}
+              onBlur={(event) => updateSetting("brand_color", normalizeHexColor(event.target.value))}
+              onChange={(event) => updateSetting("brand_color", event.target.value)}
+            />
+          </div>
         </div>
         <div className="sm:col-span-2">
           <FieldLabel htmlFor="venue-image">Venue image</FieldLabel>

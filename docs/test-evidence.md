@@ -1,6 +1,6 @@
 # Test Evidence
 
-The following cases are designed for manual demonstration in XAMPP. They include positive and negative coverage for login, public forms, booking rules, manager operations, and AI-assisted replies.
+The following cases are designed for manual demonstration in XAMPP. They include positive and negative coverage for login, public forms, booking rules, manager operations, and customer messages.
 
 | ID | Test | Type | Expected Result |
 | --- | --- | --- | --- |
@@ -16,7 +16,7 @@ The following cases are designed for manual demonstration in XAMPP. They include
 | T10 | Manager filters bookings by search, date, service, or status | Positive | Booking list updates to matching results. |
 | T11 | Manager changes a table between reservable and not reservable | Positive | Table status updates and calendar capacity uses reservable tables. |
 | T12 | Manager blocks online bookings for a selected date | Positive | Public form prevents bookings on that date and calendar/settings show the block. |
-| T13 | Manager generates an AI reply draft for a booking | Positive | Draft subject/body are generated, manager can edit, and reviewed reply can be logged. |
+| T13 | Manager sends a customer message for a booking | Positive | Manager enters subject/body manually and the message is saved to the email log. |
 | T14 | Manager uploads venue or profile image | Positive | Image is validated, stored, and displayed in the relevant UI. |
 
 ## Verification Logs

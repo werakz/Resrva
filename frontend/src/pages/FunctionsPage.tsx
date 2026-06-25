@@ -20,11 +20,11 @@ import { FieldLabel, FormMessage, SelectInput, ToastMessage, inputClass, textare
 import { LoadingState } from "../components/resrva/LoadingState";
 import { StatusBadge } from "../components/resrva/StatusBadge";
 import {
-  AiReplyComposer,
-  replyPurposeForStatus,
+  MessageComposer,
+  messagePurposeForStatus,
   statusNeedsCustomerNotice,
-  type ReplyPurpose,
-} from "../components/resrva/AiReplyComposer";
+  type MessagePurpose,
+} from "../components/resrva/MessageComposer";
 import { CustomerNotifyPrompt } from "../components/resrva/CustomerNotifyPrompt";
 
 const bookingStatuses = ["pending", "waitlist", "confirmed", "seated", "completed", "cancelled", "declined", "no_show"] as const;
@@ -78,7 +78,7 @@ type FunctionCreateForm = {
 };
 type NotifyPromptState = {
   booking: Booking;
-  purpose: ReplyPurpose;
+  purpose: MessagePurpose;
   message: string;
 };
 
@@ -192,14 +192,14 @@ function customerNoticeForStatusChange(previousStatus: string, nextStatus: strin
 
   const message =
     nextStatus === "confirmed"
-      ? "This function is now confirmed. Do you want to draft a confirmation reply for the customer?"
+      ? "This function is now confirmed. Do you want to send a message to the customer?"
       : nextStatus === "declined"
-        ? "This function has been declined. Do you want to draft a polite reply for the customer?"
-        : "This function has been cancelled. Do you want to draft an update for the customer?";
+        ? "This function has been declined. Do you want to send a message to the customer?"
+        : "This function has been cancelled. Do you want to send an update to the customer?";
 
   return {
     booking,
-    purpose: replyPurposeForStatus(nextStatus),
+    purpose: messagePurposeForStatus(nextStatus),
     message,
   };
 }
@@ -360,8 +360,8 @@ export default function FunctionsPage() {
   const [modalMessage, setModalMessage] = useState<{ type: "error" | "success"; text: string } | null>(null);
   const [message, setMessage] = useState<{ type: "error" | "success"; text: string } | null>(null);
   const [notifyPrompt, setNotifyPrompt] = useState<NotifyPromptState | null>(null);
-  const [replyTarget, setReplyTarget] = useState<Booking | null>(null);
-  const [replyOpenRequest, setReplyOpenRequest] = useState<{ token: number; purpose: ReplyPurpose } | undefined>();
+  const [messageTarget, setMessageTarget] = useState<Booking | null>(null);
+  const [messageOpenRequest, setMessageOpenRequest] = useState<{ token: number; purpose: MessagePurpose } | undefined>();
 
   const query = useMemo(() => {
     const params = new URLSearchParams({ page: String(page), per_page: "20" });
@@ -430,10 +430,10 @@ export default function FunctionsPage() {
     setIsCreateOpen(false);
   };
 
-  const openReplyFromPrompt = (booking: Booking, purpose: ReplyPurpose) => {
-    setReplyTarget(booking);
+  const openMessageFromPrompt = (booking: Booking, purpose: MessagePurpose) => {
+    setMessageTarget(booking);
     setNotifyPrompt(null);
-    setReplyOpenRequest({ token: Date.now(), purpose });
+    setMessageOpenRequest({ token: Date.now(), purpose });
   };
 
   const updateDateScope = (scope: DateScope) => {
@@ -564,15 +564,15 @@ export default function FunctionsPage() {
           purpose={notifyPrompt.purpose}
           message={notifyPrompt.message}
           onDismiss={() => setNotifyPrompt(null)}
-          onDraft={openReplyFromPrompt}
+          onMessage={openMessageFromPrompt}
         />
       ) : null}
 
-      {replyTarget ? (
-        <AiReplyComposer
-          booking={replyTarget}
+      {messageTarget ? (
+        <MessageComposer
+          booking={messageTarget}
           onLogged={loadFunctions}
-          openRequest={replyOpenRequest}
+          openRequest={messageOpenRequest}
           buttonClassName="hidden"
         />
       ) : null}
@@ -936,7 +936,7 @@ export default function FunctionsPage() {
                   </p>
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
-                  <AiReplyComposer booking={selectedBooking} onLogged={loadFunctions} />
+                  <MessageComposer booking={selectedBooking} onLogged={loadFunctions} />
                   <button
                     type="button"
                     onClick={() => saveFunction(selectedBooking)}

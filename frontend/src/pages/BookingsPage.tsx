@@ -49,11 +49,11 @@ import {
 import { LoadingState } from "../components/resrva/LoadingState";
 import { PageHeader } from "../components/resrva/PageHeader";
 import {
-  AiReplyComposer,
-  replyPurposeForStatus,
+  MessageComposer,
+  messagePurposeForStatus,
   statusNeedsCustomerNotice,
-  type ReplyPurpose,
-} from "../components/resrva/AiReplyComposer";
+  type MessagePurpose,
+} from "../components/resrva/MessageComposer";
 import { CustomerNotifyPrompt } from "../components/resrva/CustomerNotifyPrompt";
 import Button from "../components/ui/button/Button";
 import { Table, TableBody, TableCell, TableHeader, TableRow } from "../components/ui/table";
@@ -69,6 +69,7 @@ type ManualBookingForm = {
   booking_type_id: string;
   preferred_area_id: string;
   table_ids: string[];
+  reassign_table_ids: string[];
   assigned_area_id: string;
   assigned_area_ids: string[];
   table_marked: boolean;
@@ -114,6 +115,7 @@ type AvailabilityLoadState = {
 type TableAvailability = {
   unavailableTableIds: Set<string>;
   blockedAreaIds: Set<number>;
+  conflictingTableBookings: Map<string, Booking>;
 };
 
 const bookingGroupStyles: Record<
@@ -168,6 +170,7 @@ const emptyManualBooking: ManualBookingForm = {
   booking_type_id: "",
   preferred_area_id: "",
   table_ids: [],
+  reassign_table_ids: [],
   assigned_area_id: "",
   assigned_area_ids: [],
   table_marked: false,
@@ -188,6 +191,7 @@ function editFormFromBooking(booking: Booking): ManualBookingForm {
     booking_type_id: booking.booking_type_id ? String(booking.booking_type_id) : "",
     preferred_area_id: booking.preferred_area_id ? String(booking.preferred_area_id) : "",
     table_ids: parseTableIds(booking.table_ids),
+    reassign_table_ids: [],
     assigned_area_id: booking.assigned_area_id ? String(booking.assigned_area_id) : "",
     assigned_area_ids: parseTableIds(
       booking.assigned_area_ids || (booking.assigned_area_id ? String(booking.assigned_area_id) : ""),
@@ -306,7 +310,7 @@ const statusControlStyles: Record<string, string> = {
 
 type NotifyPromptState = {
   booking: Booking;
-  purpose: ReplyPurpose;
+  purpose: MessagePurpose;
   message: string;
 };
 
@@ -317,14 +321,14 @@ function customerNoticeForStatusChange(previousStatus: string, nextStatus: strin
 
   const message =
     nextStatus === "confirmed"
-      ? "This booking is now confirmed. Do you want to draft a confirmation reply for the customer?"
+      ? "This booking is now confirmed. Do you want to send a message to the customer?"
       : nextStatus === "declined"
-        ? "This booking has been declined. Do you want to draft a polite reply for the customer?"
-        : "This booking has been cancelled. Do you want to draft an update for the customer?";
+        ? "This booking has been declined. Do you want to send a message to the customer?"
+        : "This booking has been cancelled. Do you want to send an update to the customer?";
 
   return {
     booking,
-    purpose: replyPurposeForStatus(nextStatus),
+    purpose: messagePurposeForStatus(nextStatus),
     message,
   };
 }
@@ -414,7 +418,9 @@ function TablePicker({
   tables,
   selectedIds,
   onChange,
+  onConfirmReassignment,
   unavailableTableIds,
+  conflictingTableBookings,
   blockedAreaIds,
   visibleAreaIds,
   availabilityLabel,
@@ -424,7 +430,9 @@ function TablePicker({
   tables: TableRecord[];
   selectedIds: string[];
   onChange: (ids: string[]) => void;
+  onConfirmReassignment?: (tableId: string) => void;
   unavailableTableIds?: Set<string>;
+  conflictingTableBookings?: Map<string, Booking>;
   blockedAreaIds?: Set<number>;
   visibleAreaIds?: string[];
   availabilityLabel?: string;
@@ -434,8 +442,14 @@ function TablePicker({
     tableId: string;
     tableNumber: number;
   } | null>(null);
+  const [reassignmentConfirmation, setReassignmentConfirmation] = useState<{
+    tableId: string;
+    tableNumber: number;
+    booking: Booking;
+  } | null>(null);
   const selected = new Set(selectedIds);
   const unavailable = unavailableTableIds ?? new Set<string>();
+  const conflicts = conflictingTableBookings ?? new Map<string, Booking>();
   const blockedAreas = blockedAreaIds ?? new Set<number>();
   const visibleAreaSet = visibleAreaIds?.length ? new Set(visibleAreaIds) : null;
   const visibleAreas = visibleAreaSet
@@ -449,6 +463,10 @@ function TablePicker({
 
   const toggleTable = (tableId: string, bookedTable = false, walkInTable = false, tableNumber = 0) => {
     if (bookedTable && !selected.has(tableId)) {
+      const conflictBooking = conflicts.get(tableId);
+      if (conflictBooking) {
+        setReassignmentConfirmation({ tableId, tableNumber, booking: conflictBooking });
+      }
       return;
     }
 
@@ -463,6 +481,17 @@ function TablePicker({
     }
 
     onChange([...selectedIds, tableId]);
+  };
+
+  const confirmTableReassignment = () => {
+    if (!reassignmentConfirmation) return;
+
+    if (!selected.has(reassignmentConfirmation.tableId)) {
+      onChange([...selectedIds, reassignmentConfirmation.tableId]);
+      onConfirmReassignment?.(reassignmentConfirmation.tableId);
+    }
+
+    setReassignmentConfirmation(null);
   };
 
   const confirmWalkInTable = () => {
@@ -540,28 +569,36 @@ function TablePicker({
                 {areaTables.map((table) => {
                   const id = String(table.id);
                   const isSelected = selected.has(id);
-                  const isBooked = areaBlocked || unavailable.has(id);
+                  const conflictBooking = conflicts.get(id);
+                  const isTableBooked = unavailable.has(id);
                   const isWalkInTable = !reservableTable(table);
+                  const canReassign = Boolean(isTableBooked && conflictBooking && !areaBlocked && !isSelected);
 
                   return (
                     <button
                       key={table.id}
                       type="button"
                       aria-pressed={isSelected}
-                      disabled={isBooked && !isSelected}
+                      disabled={areaBlocked && !isSelected}
                       title={
-                        isBooked
-                          ? "Booked for the selected date and time"
+                        areaBlocked
+                          ? "This area is blocked for the selected date and time"
+                          : isTableBooked
+                            ? conflictBooking
+                              ? `Assigned to ${conflictBooking.customer_name || "another booking"}. Click to move.`
+                              : "Booked for the selected date and time"
                           : isWalkInTable
                             ? "Usually reserved for walk-ins"
                             : "Reservable"
                       }
-                      onClick={() => toggleTable(id, isBooked, isWalkInTable, Number(table.table_number))}
+                      onClick={() => toggleTable(id, isTableBooked && !isSelected, isWalkInTable, Number(table.table_number))}
                       className={`h-8 rounded-lg border text-theme-xs font-semibold ${
                         isSelected
                           ? "border-brand-600 bg-brand-600 text-white shadow-theme-xs"
-                          : isBooked
+                          : areaBlocked
                             ? "cursor-not-allowed border-error-200 bg-error-50 text-error-600 opacity-80"
+                            : canReassign
+                              ? "border-warning-200 bg-warning-50 text-warning-700 hover:border-warning-300 hover:bg-warning-100"
                             : isWalkInTable
                               ? "border-gray-200 bg-gray-100 text-gray-500 opacity-80 hover:border-gray-300 hover:bg-gray-200"
                               : "border-gray-300 bg-white text-gray-700 hover:bg-gray-50"
@@ -614,6 +651,53 @@ function TablePicker({
                 className="inline-flex h-10 items-center justify-center rounded-lg bg-brand-600 px-4 text-sm font-medium text-white shadow-theme-xs hover:bg-brand-700"
               >
                 Select table
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {reassignmentConfirmation ? (
+        <div
+          className="fixed inset-0 z-[1000000] flex items-center justify-center bg-black/40 px-4 py-8"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="table-reassignment-confirm-title"
+        >
+          <div className="w-full max-w-[440px] rounded-2xl border border-gray-200 bg-white p-5 shadow-theme-xl dark:border-gray-800 dark:bg-gray-900">
+            <div className="flex items-start gap-4">
+              <span className="flex size-11 shrink-0 items-center justify-center rounded-full bg-warning-50 text-warning-600 dark:bg-warning-500/15 dark:text-orange-400">
+                <AlertTriangle className="size-5" />
+              </span>
+              <div className="min-w-0">
+                <h3 id="table-reassignment-confirm-title" className="text-base font-semibold text-gray-900 dark:text-white/90">
+                  Move Table {reassignmentConfirmation.tableNumber}?
+                </h3>
+                <p className="mt-2 text-sm leading-6 text-gray-500 dark:text-gray-400">
+                  Table {reassignmentConfirmation.tableNumber} is already assigned to {reassignmentConfirmation.booking.customer_name || "another booking"} at {formatDisplayTime(reassignmentConfirmation.booking.start_time)}. Move it to this booking?
+                </p>
+                {parseTableIds(reassignmentConfirmation.booking.table_ids).length <= 1 ? (
+                  <p className="mt-2 text-sm font-medium text-warning-700 dark:text-orange-300">
+                    Moving it will leave {reassignmentConfirmation.booking.customer_name || "the old booking"} unassigned.
+                  </p>
+                ) : null}
+              </div>
+            </div>
+
+            <div className="mt-6 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+              <button
+                type="button"
+                onClick={() => setReassignmentConfirmation(null)}
+                className="inline-flex h-10 items-center justify-center rounded-lg border border-gray-300 bg-white px-4 text-sm font-medium text-gray-700 hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-300 dark:hover:bg-white/5"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={confirmTableReassignment}
+                className="inline-flex h-10 items-center justify-center rounded-lg bg-brand-600 px-4 text-sm font-medium text-white shadow-theme-xs hover:bg-brand-700"
+              >
+                Move table here
               </button>
             </div>
           </div>
@@ -739,6 +823,7 @@ function buildTableAvailability({
 }): TableAvailability {
   const unavailableTableIds = new Set<string>();
   const blockedAreaIds = new Set<number>();
+  const conflictingTableBookings = new Map<string, Booking>();
 
   for (const booking of bookings) {
     if (excludeBookingId && Number(booking.id) === Number(excludeBookingId)) {
@@ -783,10 +868,13 @@ function buildTableAvailability({
 
     for (const tableId of parseTableIds(booking.table_ids)) {
       unavailableTableIds.add(tableId);
+      if (!conflictingTableBookings.has(tableId)) {
+        conflictingTableBookings.set(tableId, booking);
+      }
     }
   }
 
-  return { unavailableTableIds, blockedAreaIds };
+  return { unavailableTableIds, blockedAreaIds, conflictingTableBookings };
 }
 
 function tableAvailabilityKey(availability: TableAvailability): string {
@@ -803,6 +891,23 @@ function isTableUnavailable(tableId: string, tables: TableRecord[], availability
 
   const table = tables.find((candidate) => String(candidate.id) === tableId);
   return table ? availability.blockedAreaIds.has(Number(table.area_id)) : false;
+}
+
+function isTableAreaBlocked(tableId: string, tables: TableRecord[], availability: TableAvailability): boolean {
+  const table = tables.find((candidate) => String(candidate.id) === tableId);
+  return table ? availability.blockedAreaIds.has(Number(table.area_id)) : false;
+}
+
+function selectedTableAllowed(tableId: string, tables: TableRecord[], availability: TableAvailability, reassignTableIds: string[]): boolean {
+  if (!isTableUnavailable(tableId, tables, availability)) {
+    return true;
+  }
+
+  return (
+    reassignTableIds.includes(tableId) &&
+    availability.unavailableTableIds.has(tableId) &&
+    !isTableAreaBlocked(tableId, tables, availability)
+  );
 }
 
 function availabilityStatusLabel(date: string, time: string, state: AvailabilityLoadState): string {
@@ -1029,6 +1134,56 @@ function bookingTypeReservedAreaIds(bookingType: BookingType | null | undefined)
   return [];
 }
 
+function diningBookingTypeMatchesTime(bookingType: BookingType, time: string): boolean {
+  if (bookingType.category !== "dining" || !time) {
+    return false;
+  }
+
+  const startTime = bookingType.schedule?.start_time?.slice(0, 5) || (bookingType.slug === "dinner" ? "17:00" : "");
+  const endTime = bookingType.schedule?.end_time?.slice(0, 5) || (bookingType.slug === "lunch" ? "16:30" : "");
+
+  if (!startTime && !endTime) {
+    return false;
+  }
+
+  const selectedMinutes = minutesFromTime(time);
+  if (startTime && selectedMinutes < minutesFromTime(startTime)) {
+    return false;
+  }
+  if (endTime && selectedMinutes > minutesFromTime(endTime)) {
+    return false;
+  }
+
+  return true;
+}
+
+function diningBookingTypeForTime(bookingTypes: BookingType[], time: string): BookingType | null {
+  if (!time) {
+    return null;
+  }
+
+  const diningTypes = bookingTypes.filter((type) => type.category === "dining" && Number(type.is_active) === 1);
+  const scheduledMatch = diningTypes.find((type) => diningBookingTypeMatchesTime(type, time));
+  if (scheduledMatch) {
+    return scheduledMatch;
+  }
+
+  const fallbackSlug = minutesFromTime(time) < 17 * 60 ? "lunch" : "dinner";
+  return diningTypes.find((type) => type.slug === fallbackSlug) || null;
+}
+
+function diningBookingTypeAdjustedForTime(
+  bookingTypes: BookingType[],
+  bookingType: BookingType | null | undefined,
+  time: string,
+): BookingType | null | undefined {
+  if (bookingType?.category !== "dining") {
+    return bookingType;
+  }
+
+  return diningBookingTypeForTime(bookingTypes, time) || bookingType;
+}
+
 function formatDateTimeLabel(value?: string): string {
   if (!value) return "-";
 
@@ -1179,8 +1334,7 @@ function bookingActivityTitle(log: ActivityLog): string {
 
     return "Booking updated";
   }
-  if (log.action === "drafted_ai_reply") return "Reply drafted";
-  if (log.action === "logged_ai_reply") return "Reply logged";
+  if (log.action === "sent_message") return "Message sent";
 
   return titleCaseAction(log.action);
 }
@@ -1837,8 +1991,8 @@ export default function BookingsPage() {
   const [message, setMessage] = useState<{ type: "error" | "success"; text: string } | null>(null);
   const [modalMessage, setModalMessage] = useState<{ type: "error" | "success"; text: string } | null>(null);
   const [notifyPrompt, setNotifyPrompt] = useState<NotifyPromptState | null>(null);
-  const [replyTarget, setReplyTarget] = useState<Booking | null>(null);
-  const [replyOpenRequest, setReplyOpenRequest] = useState<{ token: number; purpose: ReplyPurpose } | undefined>();
+  const [messageTarget, setMessageTarget] = useState<Booking | null>(null);
+  const [messageOpenRequest, setMessageOpenRequest] = useState<{ token: number; purpose: MessagePurpose } | undefined>();
 
   const query = useMemo(() => {
     const params = new URLSearchParams({ page: String(page), per_page: "50", type: "all" });
@@ -1995,9 +2149,15 @@ export default function BookingsPage() {
 
     setForm((current) => {
       const availableIds = current.table_ids.filter(
-        (tableId) => !isTableUnavailable(tableId, tablesData.tables, createTableAvailability),
+        (tableId) => selectedTableAllowed(tableId, tablesData.tables, createTableAvailability, current.reassign_table_ids),
       );
-      return availableIds.length === current.table_ids.length ? current : { ...current, table_ids: availableIds };
+      if (availableIds.length === current.table_ids.length) return current;
+
+      return {
+        ...current,
+        table_ids: availableIds,
+        reassign_table_ids: current.reassign_table_ids.filter((tableId) => availableIds.includes(tableId)),
+      };
     });
   }, [createAvailabilityKey, createTableAvailability, isCreateOpen, tablesData]);
 
@@ -2018,9 +2178,15 @@ export default function BookingsPage() {
 
     setEditForm((current) => {
       const availableIds = current.table_ids.filter(
-        (tableId) => !isTableUnavailable(tableId, tablesData.tables, editTableAvailability),
+        (tableId) => selectedTableAllowed(tableId, tablesData.tables, editTableAvailability, current.reassign_table_ids),
       );
-      return availableIds.length === current.table_ids.length ? current : { ...current, table_ids: availableIds };
+      if (availableIds.length === current.table_ids.length) return current;
+
+      return {
+        ...current,
+        table_ids: availableIds,
+        reassign_table_ids: current.reassign_table_ids.filter((tableId) => availableIds.includes(tableId)),
+      };
     });
   }, [bookingModalMode, editAvailabilityKey, editTableAvailability, editingBooking, selectedEditMode, tablesData]);
 
@@ -2062,55 +2228,94 @@ export default function BookingsPage() {
     setEditForm((current) => ({ ...current, [field]: value }));
   };
 
+  const updateCreateTime = (time: string) => {
+    setForm((current) => {
+      const currentType = (meta?.booking_types || []).find((type) => String(type.id) === current.booking_type_id);
+      const nextType = diningBookingTypeAdjustedForTime(meta?.booking_types || [], currentType, time);
+
+      return {
+        ...current,
+        time,
+        booking_type_id: nextType ? String(nextType.id) : current.booking_type_id,
+      };
+    });
+  };
+
+  const updateEditTime = (time: string) => {
+    setEditForm((current) => {
+      const currentType = (meta?.booking_types || []).find((type) => String(type.id) === current.booking_type_id);
+      const nextType = diningBookingTypeAdjustedForTime(meta?.booking_types || [], currentType, time);
+
+      return {
+        ...current,
+        time,
+        booking_type_id: nextType ? String(nextType.id) : current.booking_type_id,
+      };
+    });
+  };
+
   const updateCreateBookingType = (bookingTypeId: string) => {
     const bookingType = (meta?.booking_types || []).find((type) => String(type.id) === bookingTypeId);
-    const nextMode = bookingModeFromBookingType(bookingType, "table");
 
     setIsCreateEndTimeManual(false);
-    setForm((current) => ({
-      ...current,
-      booking_type_id: bookingTypeId,
-      table_ids: nextMode === "function" ? [] : current.table_ids,
-      assigned_area_id: nextMode === "function" ? current.assigned_area_id : "",
-      assigned_area_ids:
-        nextMode === "function"
-          ? current.assigned_area_ids.length
-            ? current.assigned_area_ids
-            : current.assigned_area_id
-              ? [current.assigned_area_id]
-              : []
-          : [],
-      event_type: nextMode === "table" ? "" : bookingType?.name || current.event_type || "",
-    }));
+    setForm((current) => {
+      const nextBookingType = diningBookingTypeAdjustedForTime(meta?.booking_types || [], bookingType, current.time);
+      const nextMode = bookingModeFromBookingType(nextBookingType, "table");
+
+      return {
+        ...current,
+        booking_type_id: nextBookingType ? String(nextBookingType.id) : bookingTypeId,
+        table_ids: nextMode === "function" ? [] : current.table_ids,
+        reassign_table_ids: nextMode === "function" ? [] : current.reassign_table_ids,
+        assigned_area_id: nextMode === "function" ? current.assigned_area_id : "",
+        assigned_area_ids:
+          nextMode === "function"
+            ? current.assigned_area_ids.length
+              ? current.assigned_area_ids
+              : current.assigned_area_id
+                ? [current.assigned_area_id]
+                : []
+            : [],
+        event_type: nextMode === "table" ? "" : nextBookingType?.name || current.event_type || "",
+      };
+    });
   };
 
   const updateEditBookingType = (bookingTypeId: string) => {
     const bookingType = (meta?.booking_types || []).find((type) => String(type.id) === bookingTypeId);
-    const nextMode = bookingModeFromBookingType(bookingType, editingBooking?.booking_type || "table");
 
-    if (nextMode === "function") {
-      setIsEditTablePickerOpen(false);
-    }
+    setEditForm((current) => {
+      const nextBookingType = diningBookingTypeAdjustedForTime(meta?.booking_types || [], bookingType, current.time);
+      const nextMode = bookingModeFromBookingType(nextBookingType, editingBooking?.booking_type || "table");
 
-    setEditForm((current) => ({
-      ...current,
-      booking_type_id: bookingTypeId,
-      table_ids: nextMode === "function" ? [] : current.table_ids,
-      assigned_area_id: nextMode === "function" ? current.assigned_area_id : "",
-      assigned_area_ids:
-        nextMode === "function"
-          ? current.assigned_area_ids.length
-            ? current.assigned_area_ids
-            : current.assigned_area_id
-              ? [current.assigned_area_id]
-              : []
-          : [],
-      event_type: nextMode === "function" ? current.event_type || bookingType?.name || "" : current.event_type,
-    }));
+      if (nextMode === "function") {
+        setIsEditTablePickerOpen(false);
+      }
+
+      return {
+        ...current,
+        booking_type_id: nextBookingType ? String(nextBookingType.id) : bookingTypeId,
+        table_ids: nextMode === "function" ? [] : current.table_ids,
+        reassign_table_ids: nextMode === "function" ? [] : current.reassign_table_ids,
+        assigned_area_id: nextMode === "function" ? current.assigned_area_id : "",
+        assigned_area_ids:
+          nextMode === "function"
+            ? current.assigned_area_ids.length
+              ? current.assigned_area_ids
+              : current.assigned_area_id
+                ? [current.assigned_area_id]
+                : []
+            : [],
+        event_type: nextMode === "function" ? current.event_type || nextBookingType?.name || "" : current.event_type,
+      };
+    });
   };
 
   const openCreateModal = () => {
-    const defaultBookingType = (meta?.booking_types || []).find((type) => Number(type.is_active) === 1);
+    const defaultTime = "18:00";
+    const defaultBookingType =
+      diningBookingTypeForTime(meta?.booking_types || [], defaultTime) ||
+      (meta?.booking_types || []).find((type) => Number(type.is_active) === 1);
     const defaultMode = bookingModeFromBookingType(defaultBookingType, "table");
 
     setModalMessage(null);
@@ -2120,7 +2325,7 @@ export default function BookingsPage() {
       booking_type_id: defaultBookingType ? String(defaultBookingType.id) : "",
       event_type: defaultMode === "table" ? "" : defaultBookingType?.name || "",
       date: todayIso(),
-      time: "18:00",
+      time: defaultTime,
       guest_count: "8",
     });
     setIsCreateOpen(true);
@@ -2179,10 +2384,10 @@ export default function BookingsPage() {
     setBookingModalMode("view");
   };
 
-  const openReplyFromPrompt = (booking: Booking, purpose: ReplyPurpose) => {
-    setReplyTarget(booking);
+  const openMessageFromPrompt = (booking: Booking, purpose: MessagePurpose) => {
+    setMessageTarget(booking);
     setNotifyPrompt(null);
-    setReplyOpenRequest({ token: Date.now(), purpose });
+    setMessageOpenRequest({ token: Date.now(), purpose });
   };
 
   const updateDateRange = (dateFrom: string, dateTo: string, scope: DateScope = "") => {
@@ -2258,7 +2463,10 @@ export default function BookingsPage() {
           end_time: submittedEndTime,
           booking_type_id: form.booking_type_id ? Number(form.booking_type_id) : undefined,
           table_ids: form.table_ids.map(Number),
-          table_marked: createCanMarkTable && form.table_marked,
+          reassign_table_ids: selectedCreateMode === "function"
+            ? []
+            : form.reassign_table_ids.filter((tableId) => form.table_ids.includes(tableId)).map(Number),
+          table_marked: false,
           assigned_area_ids: form.assigned_area_ids.map(Number),
           assigned_area_id: form.assigned_area_ids[0] || null,
           event_type: selectedCreateMode === "table" ? undefined : form.event_type || selectedCreateBookingType?.name || undefined,
@@ -2432,6 +2640,9 @@ export default function BookingsPage() {
       selectedEditMode === "table"
         ? {
             table_ids: editForm.table_ids.map(Number),
+            reassign_table_ids: editForm.reassign_table_ids
+              .filter((tableId) => editForm.table_ids.includes(tableId))
+              .map(Number),
           }
         : selectedEditMode === "function"
           ? {
@@ -2441,6 +2652,9 @@ export default function BookingsPage() {
           : selectedEditMode === "event"
             ? {
                 table_ids: editForm.table_ids.map(Number),
+                reassign_table_ids: editForm.reassign_table_ids
+                  .filter((tableId) => editForm.table_ids.includes(tableId))
+                  .map(Number),
               }
             : {};
 
@@ -2535,7 +2749,6 @@ export default function BookingsPage() {
     .filter((option) => form.assigned_area_ids.includes(option.value))
     .map((option) => option.label)
     .join(", ");
-  const createCanMarkTable = true;
   const createEndTime = form.end_time || endTimeFromStart(form.time, createDurationMinutes);
   const editEndTime = editForm.end_time || endTimeFromStart(editForm.time, editDurationMinutes);
   const selectedTypeReservedAreaIds = bookingTypeReservedAreaIds(selectedEditBookingType);
@@ -2626,15 +2839,15 @@ export default function BookingsPage() {
           purpose={notifyPrompt.purpose}
           message={notifyPrompt.message}
           onDismiss={() => setNotifyPrompt(null)}
-          onDraft={openReplyFromPrompt}
+          onMessage={openMessageFromPrompt}
         />
       ) : null}
 
-      {replyTarget ? (
-        <AiReplyComposer
-          booking={replyTarget}
+      {messageTarget ? (
+        <MessageComposer
+          booking={messageTarget}
           onLogged={loadBookings}
-          openRequest={replyOpenRequest}
+          openRequest={messageOpenRequest}
           buttonClassName="hidden"
         />
       ) : null}
@@ -2846,7 +3059,7 @@ export default function BookingsPage() {
                           className={compactInputClass}
                           required
                           value={form.time}
-                          onChange={(event) => updateForm("time", event.target.value)}
+                          onChange={(event) => updateCreateTime(event.target.value)}
                         />
                       </div>
                       <div>
@@ -2878,29 +3091,6 @@ export default function BookingsPage() {
                           onChange={(event) => updateForm("staff_name", event.target.value)}
                         />
                       </div>
-                      <label
-                        htmlFor="manual-table-marked"
-                        className={`sm:col-span-2 flex items-start gap-3 rounded-lg border px-3 py-3 text-sm ${
-                          createCanMarkTable
-                            ? "border-gray-200 bg-white text-gray-700 dark:border-gray-800 dark:bg-white/[0.02] dark:text-gray-300"
-                            : "border-gray-200 bg-gray-50 text-gray-400 dark:border-gray-800 dark:bg-white/[0.02]"
-                        }`}
-                      >
-                        <input
-                          id="manual-table-marked"
-                          type="checkbox"
-                          className="mt-1 size-4 rounded border-gray-300 text-success-600 focus:ring-success-500/20 disabled:cursor-not-allowed"
-                          checked={createCanMarkTable && form.table_marked}
-                          disabled={!createCanMarkTable}
-                          onChange={(event) => updateForm("table_marked", event.target.checked)}
-                        />
-                        <span>
-                          <span className="block font-semibold text-gray-900 dark:text-white/90">Reserve Sign placed</span>
-                          <span className="mt-0.5 block text-xs text-gray-500 dark:text-gray-400">
-                            Reserve Sign has been placed for this booking.
-                          </span>
-                        </span>
-                      </label>
                       <div>
                         <FieldLabel htmlFor="manual-notes">Notes</FieldLabel>
                         <textarea
@@ -2953,9 +3143,19 @@ export default function BookingsPage() {
                           setForm((current) => ({
                             ...current,
                             table_ids: ids,
+                            reassign_table_ids: current.reassign_table_ids.filter((tableId) => ids.includes(tableId)),
+                          }));
+                        }}
+                        onConfirmReassignment={(tableId) => {
+                          setForm((current) => ({
+                            ...current,
+                            reassign_table_ids: current.reassign_table_ids.includes(tableId)
+                              ? current.reassign_table_ids
+                              : [...current.reassign_table_ids, tableId],
                           }));
                         }}
                         unavailableTableIds={createTableAvailability.unavailableTableIds}
+                        conflictingTableBookings={createTableAvailability.conflictingTableBookings}
                         blockedAreaIds={createTableAvailability.blockedAreaIds}
                         visibleAreaIds={createTableVisibleAreaIds}
                         isAvailabilityLoading={createAvailability.loading}
@@ -3046,10 +3246,10 @@ export default function BookingsPage() {
                       <Pencil className="size-4" />
                       Edit booking
                     </button>
-                    <AiReplyComposer
+                    <MessageComposer
                       booking={editingBooking}
                       onLogged={loadBookings}
-                      buttonLabel="Send / Reply"
+                      buttonLabel="Send message"
                       buttonClassName="inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-gray-300 bg-white px-4 text-sm font-semibold text-gray-700 shadow-theme-xs hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-300 dark:hover:bg-white/5"
                     />
                   </>
@@ -3227,7 +3427,7 @@ export default function BookingsPage() {
                             className={`${compactInputClass} pl-10`}
                             required
                             value={editForm.time}
-                            onChange={(event) => updateEditForm("time", event.target.value)}
+                            onChange={(event) => updateEditTime(event.target.value)}
                           />
                         </div>
                       </div>
@@ -3457,9 +3657,19 @@ export default function BookingsPage() {
                   setEditForm((current) => ({
                     ...current,
                     table_ids: ids,
+                    reassign_table_ids: current.reassign_table_ids.filter((tableId) => ids.includes(tableId)),
+                  }));
+                }}
+                onConfirmReassignment={(tableId) => {
+                  setEditForm((current) => ({
+                    ...current,
+                    reassign_table_ids: current.reassign_table_ids.includes(tableId)
+                      ? current.reassign_table_ids
+                      : [...current.reassign_table_ids, tableId],
                   }));
                 }}
                 unavailableTableIds={editTableAvailability.unavailableTableIds}
+                conflictingTableBookings={editTableAvailability.conflictingTableBookings}
                 blockedAreaIds={editTableAvailability.blockedAreaIds}
                 visibleAreaIds={editTableVisibleAreaIds}
                 isAvailabilityLoading={editAvailability.loading}
