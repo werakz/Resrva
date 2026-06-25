@@ -16,7 +16,7 @@ import {
 } from "lucide-react";
 import { apiFetch, toJsonBody } from "../lib/api";
 import type { Area, Booking, MetaPayload, Paginated } from "../types";
-import { FieldLabel, FormMessage, SelectInput, inputClass, textareaClass } from "../components/resrva/FormField";
+import { FieldLabel, FormMessage, SelectInput, ToastMessage, inputClass, textareaClass } from "../components/resrva/FormField";
 import { LoadingState } from "../components/resrva/LoadingState";
 import { StatusBadge } from "../components/resrva/StatusBadge";
 import {
@@ -27,7 +27,17 @@ import {
 } from "../components/resrva/AiReplyComposer";
 import { CustomerNotifyPrompt } from "../components/resrva/CustomerNotifyPrompt";
 
-const functionStatuses = ["pending", "approved", "confirmed", "declined", "cancelled"] as const;
+const bookingStatuses = ["pending", "waitlist", "confirmed", "seated", "completed", "cancelled", "declined", "no_show"] as const;
+const statusLabels: Record<string, string> = {
+  pending: "Pending",
+  waitlist: "Waitlist",
+  confirmed: "Confirmed",
+  seated: "In progress",
+  completed: "Completed",
+  cancelled: "Cancelled",
+  declined: "Declined",
+  no_show: "No show",
+};
 const dateScopeTabs = [
   { label: "Today", value: "today" },
   { label: "Upcoming", value: "upcoming" },
@@ -46,7 +56,9 @@ type FunctionEditState = {
   preferred_area_id: string;
   status: string;
   assigned_area_ids: string[];
+  table_marked: boolean;
   staff_notes: string;
+  staff_name: string;
 };
 type FunctionCreateForm = {
   name: string;
@@ -59,8 +71,10 @@ type FunctionCreateForm = {
   event_type: string;
   status: string;
   assigned_area_ids: string[];
+  table_marked: boolean;
   notes: string;
   staff_notes: string;
+  staff_name: string;
 };
 type NotifyPromptState = {
   booking: Booking;
@@ -79,8 +93,10 @@ const emptyCreateFunction: FunctionCreateForm = {
   event_type: "",
   status: "pending",
   assigned_area_ids: [],
+  table_marked: false,
   notes: "",
   staff_notes: "",
+  staff_name: "",
 };
 
 function toIsoDate(date: Date): string {
@@ -145,9 +161,11 @@ function minutesBetween(start: string, end: string): number {
 }
 
 function statusLabel(status: string): string {
-  return status
-    .replace("_", " ")
-    .replace(/\b\w/g, (letter) => letter.toUpperCase());
+  return statusLabels[status] || status.replace("_", " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function statusNeedsFunctionArea(status: string): boolean {
+  return ["confirmed", "seated", "completed"].includes(status);
 }
 
 function parseIds(value?: string | null): string[] {
@@ -157,6 +175,10 @@ function parseIds(value?: string | null): string[] {
         .map((id) => id.trim())
         .filter(Boolean)
     : [];
+}
+
+function truthy(value: number | boolean | string | undefined | null): boolean {
+  return value === true || value === 1 || value === "1";
 }
 
 function assignedAreaLabel(booking: Booking): string {
@@ -169,7 +191,7 @@ function customerNoticeForStatusChange(previousStatus: string, nextStatus: strin
   }
 
   const message =
-    nextStatus === "confirmed" || nextStatus === "approved"
+    nextStatus === "confirmed"
       ? "This function is now confirmed. Do you want to draft a confirmation reply for the customer?"
       : nextStatus === "declined"
         ? "This function has been declined. Do you want to draft a polite reply for the customer?"
@@ -192,7 +214,9 @@ function editForBooking(booking: Booking): FunctionEditState {
     preferred_area_id: booking.preferred_area_id ? String(booking.preferred_area_id) : "",
     status: booking.status,
     assigned_area_ids: parseIds(booking.assigned_area_ids || (booking.assigned_area_id ? String(booking.assigned_area_id) : "")),
+    table_marked: truthy(booking.table_marked),
     staff_notes: booking.staff_notes || "",
+    staff_name: booking.staff_name || "",
   };
 }
 
@@ -428,7 +452,7 @@ export default function FunctionsPage() {
     setMessage(null);
     setModalMessage(null);
 
-    if (["approved", "confirmed"].includes(createForm.status) && createForm.assigned_area_ids.length === 0) {
+    if (statusNeedsFunctionArea(createForm.status) && createForm.assigned_area_ids.length === 0) {
       setModalMessage({ type: "error", text: "Select at least one function area before approving." });
       return;
     }
@@ -442,6 +466,7 @@ export default function FunctionsPage() {
           duration_minutes: Number(createForm.duration_minutes),
           assigned_area_ids: createForm.assigned_area_ids.map(Number),
           assigned_area_id: createForm.assigned_area_ids[0] || null,
+          table_marked: createForm.table_marked,
         }),
       });
       const created = response.item;
@@ -481,7 +506,7 @@ export default function FunctionsPage() {
       return;
     }
 
-    if (["approved", "confirmed"].includes(edit.status) && edit.assigned_area_ids.length === 0) {
+    if (statusNeedsFunctionArea(edit.status) && edit.assigned_area_ids.length === 0) {
       setMessage({ type: "error", text: "Select at least one function area before approving." });
       return;
     }
@@ -499,7 +524,9 @@ export default function FunctionsPage() {
           status: edit.status,
           assigned_area_ids: edit.assigned_area_ids.map(Number),
           assigned_area_id: edit.assigned_area_ids[0] || null,
+          table_marked: edit.table_marked,
           staff_notes: edit.staff_notes,
+          staff_name: edit.staff_name,
         }),
       });
 
@@ -550,6 +577,12 @@ export default function FunctionsPage() {
         />
       ) : null}
 
+      {message ? (
+        <ToastMessage type={message.type} onDismiss={() => setMessage(null)}>
+          {message.text}
+        </ToastMessage>
+      ) : null}
+
       {isCreateOpen ? (
         <div
           className="fixed inset-0 z-999999 flex items-center justify-center overflow-y-auto bg-black/40 px-4 py-4"
@@ -583,7 +616,7 @@ export default function FunctionsPage() {
                 <section className="rounded-xl border border-gray-200 p-4 dark:border-gray-800">
                   <div className="grid gap-3 sm:grid-cols-2">
                     <div>
-                      <FieldLabel htmlFor="create-function-name">Name</FieldLabel>
+                      <FieldLabel htmlFor="create-function-name" required>Name</FieldLabel>
                       <input
                         id="create-function-name"
                         className={inputClass}
@@ -593,7 +626,7 @@ export default function FunctionsPage() {
                       />
                     </div>
                     <div>
-                      <FieldLabel htmlFor="create-function-phone">Phone</FieldLabel>
+                      <FieldLabel htmlFor="create-function-phone" required>Phone</FieldLabel>
                       <input
                         id="create-function-phone"
                         className={inputClass}
@@ -603,7 +636,7 @@ export default function FunctionsPage() {
                       />
                     </div>
                     <div className="sm:col-span-2">
-                      <FieldLabel htmlFor="create-function-email">Email</FieldLabel>
+                      <FieldLabel htmlFor="create-function-email" required>Email</FieldLabel>
                       <input
                         id="create-function-email"
                         type="email"
@@ -614,7 +647,7 @@ export default function FunctionsPage() {
                       />
                     </div>
                     <div>
-                      <FieldLabel htmlFor="create-function-date">Date</FieldLabel>
+                      <FieldLabel htmlFor="create-function-date" required>Date</FieldLabel>
                       <SingleDatePicker
                         id="create-function-date"
                         required
@@ -623,7 +656,7 @@ export default function FunctionsPage() {
                       />
                     </div>
                     <div>
-                      <FieldLabel htmlFor="create-function-time">Time</FieldLabel>
+                      <FieldLabel htmlFor="create-function-time" required>Time</FieldLabel>
                       <input
                         id="create-function-time"
                         type="time"
@@ -635,7 +668,7 @@ export default function FunctionsPage() {
                       />
                     </div>
                     <div>
-                      <FieldLabel htmlFor="create-function-duration">Duration</FieldLabel>
+                      <FieldLabel htmlFor="create-function-duration" required>Duration</FieldLabel>
                       <SelectInput
                         id="create-function-duration"
                         value={createForm.duration_minutes}
@@ -649,11 +682,11 @@ export default function FunctionsPage() {
                       />
                     </div>
                     <div>
-                      <FieldLabel htmlFor="create-function-guests">Guests</FieldLabel>
+                      <FieldLabel htmlFor="create-function-guests" required>Guests</FieldLabel>
                       <input
                         id="create-function-guests"
                         type="number"
-                        min="8"
+                        min="1"
                         className={inputClass}
                         required
                         value={createForm.guest_count}
@@ -661,7 +694,7 @@ export default function FunctionsPage() {
                       />
                     </div>
                     <div>
-                      <FieldLabel htmlFor="create-function-event-type">Event type</FieldLabel>
+                      <FieldLabel htmlFor="create-function-event-type" required>Event type</FieldLabel>
                       <input
                         id="create-function-event-type"
                         className={inputClass}
@@ -676,7 +709,7 @@ export default function FunctionsPage() {
                         id="create-function-status"
                         value={createForm.status}
                         onChange={(value) => updateCreateForm("status", value)}
-                        options={functionStatuses.map((status) => ({
+                        options={bookingStatuses.map((status) => ({
                           value: status,
                           label: statusLabel(status),
                         }))}
@@ -698,6 +731,33 @@ export default function FunctionsPage() {
                   </div>
 
                   <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                    <div className="sm:col-span-2">
+                      <FieldLabel htmlFor="create-function-staff-name">Staff name</FieldLabel>
+                      <input
+                        id="create-function-staff-name"
+                        className={inputClass}
+                        value={createForm.staff_name}
+                        onChange={(event) => updateCreateForm("staff_name", event.target.value)}
+                      />
+                    </div>
+                    <label
+                      htmlFor="create-function-reserve-sign"
+                      className="sm:col-span-2 flex items-start gap-3 rounded-lg border border-gray-200 bg-white px-3 py-3 text-sm text-gray-700 dark:border-gray-800 dark:bg-white/[0.02] dark:text-gray-300"
+                    >
+                      <input
+                        id="create-function-reserve-sign"
+                        type="checkbox"
+                        className="mt-1 size-4 rounded border-gray-300 text-success-600 focus:ring-success-500/20"
+                        checked={createForm.table_marked}
+                        onChange={(event) => updateCreateForm("table_marked", event.target.checked)}
+                      />
+                      <span>
+                        <span className="block font-semibold text-gray-900 dark:text-white/90">Reserve Sign placed</span>
+                        <span className="mt-0.5 block text-xs text-gray-500 dark:text-gray-400">
+                          Reserve Sign has been placed for this booking.
+                        </span>
+                      </span>
+                    </label>
                     <div>
                       <FieldLabel htmlFor="create-function-notes">Guest note</FieldLabel>
                       <textarea
@@ -767,12 +827,6 @@ export default function FunctionsPage() {
           Create function
         </button>
       </div>
-
-      {message ? (
-        <div className="mt-4">
-          <FormMessage type={message.type}>{message.text}</FormMessage>
-        </div>
-      ) : null}
 
       <div className="mt-5 grid gap-5 xl:grid-cols-[minmax(360px,0.85fr)_minmax(0,1.45fr)]">
         <section className="overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-theme-xs dark:border-gray-800 dark:bg-white/[0.03]">
@@ -992,12 +1046,30 @@ export default function FunctionsPage() {
                         onChange={(value) => updateEdit(selectedBooking, { status: value })}
                         className="max-w-[220px]"
                         menuClassName="min-w-[220px]"
-                        options={functionStatuses.map((status) => ({
+                        options={bookingStatuses.map((status) => ({
                           value: status,
                           label: statusLabel(status),
                         }))}
                       />
                     </div>
+                    <label
+                      htmlFor="function-detail-reserve-sign"
+                      className="flex items-start gap-3 rounded-lg border border-gray-200 bg-white px-3 py-3 text-sm text-gray-700 dark:border-gray-800 dark:bg-white/[0.02] dark:text-gray-300"
+                    >
+                      <input
+                        id="function-detail-reserve-sign"
+                        type="checkbox"
+                        className="mt-1 size-4 rounded border-gray-300 text-success-600 focus:ring-success-500/20"
+                        checked={selectedEdit.table_marked}
+                        onChange={(event) => updateEdit(selectedBooking, { table_marked: event.target.checked })}
+                      />
+                      <span>
+                        <span className="block font-semibold text-gray-900 dark:text-white/90">Reserve Sign placed</span>
+                        <span className="mt-0.5 block text-xs text-gray-500 dark:text-gray-400">
+                          Reserve Sign has been placed for this booking.
+                        </span>
+                      </span>
+                    </label>
 
                     <div className="border-t border-gray-100 pt-4 dark:border-gray-800">
                       <h3 className={detailSectionTitleClass}>Contact</h3>
@@ -1035,6 +1107,15 @@ export default function FunctionsPage() {
                     >
                       {selectedBooking.notes || "-"}
                     </div>
+                  </div>
+                  <div>
+                    <FieldLabel htmlFor="function-staff-name">Staff name</FieldLabel>
+                    <input
+                      id="function-staff-name"
+                      className={inputClass}
+                      value={selectedEdit.staff_name}
+                      onChange={(event) => updateEdit(selectedBooking, { staff_name: event.target.value })}
+                    />
                   </div>
                   <div>
                     <FieldLabel htmlFor="function-staff-notes">Staff note</FieldLabel>

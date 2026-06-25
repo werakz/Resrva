@@ -38,6 +38,23 @@ const initialFunctionForm: FunctionForm = {
   notes: "",
 };
 
+function listFormatter(items: string[]): string {
+  if (items.length === 0) return "";
+  if (items.length === 1) return items[0];
+  if (items.length === 2) return `${items[0]} and ${items[1]}`;
+
+  return `${items.slice(0, -1).join(", ")}, and ${items[items.length - 1]}`;
+}
+
+function todayIso(): string {
+  const date = new Date();
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+
+  return `${year}-${month}-${day}`;
+}
+
 export default function PublicFunctionRequest() {
   const [meta, setMeta] = useState<MetaPayload | null>(null);
   const [form, setForm] = useState<FunctionForm>(initialFunctionForm);
@@ -57,6 +74,10 @@ export default function PublicFunctionRequest() {
   const functionRequestsEnabled = (meta?.settings.online_function_requests_enabled ?? "1") !== "0";
   const venueName = meta?.settings.venue_name || "Old Canberra Inn";
   const venueImageUrl = meta?.settings.venue_image_url || "";
+  const functionAreaNames = (meta?.function_areas || []).map((area) => area.name).filter(Boolean);
+  const areaIntro = functionAreaNames.length
+    ? `Preferred areas include ${listFormatter(functionAreaNames)}. A manager confirms the final area after review.`
+    : "A manager will confirm the final area after review.";
 
   const submitRequest = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -117,8 +138,7 @@ export default function PublicFunctionRequest() {
             </p>
             <h1 className="mt-2 text-3xl font-semibold text-gray-950">Request a function booking</h1>
             <p className="mt-2 text-sm text-gray-500">
-              Preferred areas are Schumack, Wisteria, and Kookaburra. A manager confirms
-              the final area after review.
+              {areaIntro}
             </p>
           </div>
 
@@ -176,6 +196,7 @@ export default function PublicFunctionRequest() {
               <input
                 id="event-date"
                 type="date"
+                min={todayIso()}
                 className={inputClass}
                 required
                 value={form.event_date}

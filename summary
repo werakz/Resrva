@@ -1,5 +1,49 @@
 # Daily Summary
 
+## 2026-06-12
+
+Today we focused on smoothing the manager workflow after the multi-client and booking-type work.
+
+### Client management
+
+- Fixed the Resrva Admin clients page so **All clients** now stays on the main client list.
+- Removed the auto-selection behavior that kept reopening the first seeded client, Old Canberra Inn.
+- The client detail page still opens normally when a client is selected.
+
+### AI reply drafts
+
+- Fixed the AI reply composer so the draft subject and reply body can be edited reliably.
+- Prevented prompt-triggered draft generation from reopening/regenerating the composer more than once for the same request.
+- Prevented late AI responses from overwriting manual edits after the manager starts typing.
+- Added support for custom AI reply button labels, used for the booking detail action.
+
+### Booking details and edit mode
+
+- Changed booking rows to open a booking details modal first instead of jumping straight into editing.
+- Added a richer booking details view with:
+  - Booking summary.
+  - Reservation details.
+  - Guest and contact details.
+  - Notes.
+  - Activity/history.
+- Reworked edit mode to match the provided reference layout more closely:
+  - Status, Save changes, Cancel, and close controls live in the modal header.
+  - Main edit surface is split into reservation/notes content and guest/contact content.
+  - Preference, area/section, and source were intentionally left read-only.
+  - Assigned table remains editable in the compact edit layout.
+
+### Quality checks
+
+- Ran frontend production builds after the client page, AI reply composer, and booking modal updates.
+- Build is passing.
+- The only remaining build note is the existing Vite large chunk warning.
+
+### Continue Tomorrow
+
+- Visually test the new booking details/edit modal with table, function, and event bookings.
+- Recheck assigned-table editing against bookings that use multiple joined tables.
+- Continue tightening the owner/admin and support-mode workflows.
+
 ## 2026-06-11
 
 Today we moved Resrva further from a single-venue booking tool toward a multi-client, multi-venue platform.

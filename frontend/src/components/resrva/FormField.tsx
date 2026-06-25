@@ -1,4 +1,4 @@
-import { Check, ChevronDown } from "lucide-react";
+import { Check, ChevronDown, X } from "lucide-react";
 import { useEffect, useId, useRef, useState } from "react";
 import type { KeyboardEvent, ReactNode } from "react";
 import { createPortal } from "react-dom";
@@ -6,13 +6,23 @@ import { createPortal } from "react-dom";
 export function FieldLabel({
   htmlFor,
   children,
+  required = false,
 }: {
   htmlFor: string;
   children: ReactNode;
+  required?: boolean;
 }) {
   return (
     <label htmlFor={htmlFor} className="mb-1.5 block text-sm font-medium text-gray-700">
       {children}
+      {required ? (
+        <>
+          <span aria-hidden="true" className="ml-1 text-error-500">
+            *
+          </span>
+          <span className="sr-only"> required</span>
+        </>
+      ) : null}
     </label>
   );
 }
@@ -491,5 +501,53 @@ export function FormMessage({
     <div className={`rounded-lg border px-4 py-3 text-sm ${styles[type]}`}>
       {children}
     </div>
+  );
+}
+
+export function ToastMessage({
+  type,
+  children,
+  onDismiss,
+  autoDismissMs = 5000,
+}: {
+  type: "error" | "success" | "info";
+  children: ReactNode;
+  onDismiss?: () => void;
+  autoDismissMs?: number;
+}) {
+  const styles = {
+    error: "border-error-200 bg-error-50 text-error-700",
+    success: "border-success-200 bg-success-50 text-success-700",
+    info: "border-blue-light-200 bg-blue-light-50 text-blue-light-700",
+  };
+
+  useEffect(() => {
+    if (!onDismiss || autoDismissMs <= 0) return undefined;
+
+    const timeout = window.setTimeout(onDismiss, autoDismissMs);
+    return () => window.clearTimeout(timeout);
+  }, [autoDismissMs, children, onDismiss, type]);
+
+  return createPortal(
+    <div className="pointer-events-none fixed bottom-5 right-5 z-[1000020] flex max-w-[calc(100vw-2.5rem)] flex-col items-end">
+      <div
+        role={type === "error" ? "alert" : "status"}
+        aria-live={type === "error" ? "assertive" : "polite"}
+        className={`pointer-events-auto flex w-full max-w-sm items-start gap-3 rounded-lg border px-4 py-3 text-sm shadow-theme-lg ${styles[type]}`}
+      >
+        <div className="min-w-0 flex-1">{children}</div>
+        {onDismiss ? (
+          <button
+            type="button"
+            onClick={onDismiss}
+            className="mt-0.5 shrink-0 rounded-md p-0.5 opacity-70 transition hover:bg-black/5 hover:opacity-100"
+            aria-label="Dismiss notification"
+          >
+            <X className="size-4" />
+          </button>
+        ) : null}
+      </div>
+    </div>,
+    document.body,
   );
 }

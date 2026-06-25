@@ -1,32 +1,48 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { ReactNode } from "react";
 import { useLocation } from "react-router";
 import flatpickr from "flatpickr";
 import type { Instance as FlatpickrInstance } from "flatpickr/dist/types/instance";
 import {
   AlertTriangle,
   ArrowUpDown,
+  Calendar,
   CalendarDays,
   CalendarCheck,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
-  MoreHorizontal,
+  Clock,
+  FileText,
+  History,
+  Mail,
+  MapPin,
   Moon,
+  Pencil,
+  Phone,
   Plus,
   Save,
   Sun,
+  Table2,
+  TableProperties,
+  Tag,
   User,
+  UserRound,
+  Users,
+  Utensils,
   X,
   type LucideIcon,
 } from "lucide-react";
 import { apiFetch, toJsonBody } from "../lib/api";
 import { bookingTypeColourVars } from "../lib/bookingTypeColours";
 import { getBookingIcon } from "../lib/bookingTypeIcons";
-import type { Area, Booking, BookingType, MetaPayload, Paginated, TableRecord } from "../types";
+import type { ActivityLog, Area, Booking, BookingType, MetaPayload, Paginated, TableRecord } from "../types";
 import {
   FieldLabel,
   FormMessage,
+  MultiSelectInput,
   SelectInput,
+  ToastMessage,
   inputClass,
   textareaClass,
 } from "../components/resrva/FormField";
@@ -48,12 +64,17 @@ type ManualBookingForm = {
   phone: string;
   date: string;
   time: string;
+  end_time: string;
   guest_count: string;
+  booking_type_id: string;
+  preferred_area_id: string;
   table_ids: string[];
   assigned_area_id: string;
   assigned_area_ids: string[];
+  table_marked: boolean;
   notes: string;
   staff_notes: string;
+  staff_name: string;
   status?: string;
   event_type?: string;
 };
@@ -70,6 +91,18 @@ type BookingGroup = {
   timeRange?: string;
   colour?: string | null;
   icon?: string | null;
+};
+
+type BookingModalMode = "view" | "edit";
+
+type ReserveSignConfirmState = {
+  groupKey: string;
+  groupTitle: string;
+  date: string;
+  bookingIds: number[];
+  tableMarked: boolean;
+  actionLabel: "Place" | "Clear";
+  resultLabel: "placed" | "cleared";
 };
 
 type AvailabilityLoadState = {
@@ -130,13 +163,43 @@ const emptyManualBooking: ManualBookingForm = {
   phone: "",
   date: "",
   time: "",
+  end_time: "",
   guest_count: "",
+  booking_type_id: "",
+  preferred_area_id: "",
   table_ids: [],
   assigned_area_id: "",
   assigned_area_ids: [],
+  table_marked: false,
   notes: "",
   staff_notes: "",
+  staff_name: "",
 };
+
+function editFormFromBooking(booking: Booking): ManualBookingForm {
+  return {
+    name: booking.customer_name || "",
+    email: booking.customer_email || "",
+    phone: booking.customer_phone || "",
+    date: booking.booking_date || "",
+    time: booking.start_time?.slice(0, 5) || "",
+    end_time: booking.end_time?.slice(0, 5) || "",
+    guest_count: String(booking.guest_count || ""),
+    booking_type_id: booking.booking_type_id ? String(booking.booking_type_id) : "",
+    preferred_area_id: booking.preferred_area_id ? String(booking.preferred_area_id) : "",
+    table_ids: parseTableIds(booking.table_ids),
+    assigned_area_id: booking.assigned_area_id ? String(booking.assigned_area_id) : "",
+    assigned_area_ids: parseTableIds(
+      booking.assigned_area_ids || (booking.assigned_area_id ? String(booking.assigned_area_id) : ""),
+    ),
+    table_marked: truthy(booking.table_marked),
+    notes: booking.notes || "",
+    staff_notes: booking.staff_notes || "",
+    staff_name: booking.staff_name || "",
+    status: booking.status,
+    event_type: booking.event_type || "",
+  };
+}
 
 const dateScopeTabs = [
   { label: "Today", value: "today" },
@@ -157,11 +220,24 @@ const sortOptions = [
 
 type SortKey = (typeof sortOptions)[number]["value"];
 
-const tableStatuses = ["confirmed", "seated", "completed", "cancelled", "no_show"];
-const functionStatuses = ["pending", "approved", "confirmed", "declined", "cancelled"];
-const eventStatuses = ["pending", "confirmed", "waitlist", "completed", "cancelled"];
+const bookingStatuses = ["pending", "waitlist", "confirmed", "seated", "completed", "cancelled", "declined", "no_show"];
+const bulkReserveSignStatuses = new Set(["pending", "waitlist", "confirmed", "seated", "completed"]);
+const statusLabels: Record<string, string> = {
+  pending: "Pending",
+  waitlist: "Waitlist",
+  confirmed: "Confirmed",
+  seated: "In progress",
+  completed: "Completed",
+  cancelled: "Cancelled",
+  declined: "Declined",
+  no_show: "No show",
+};
 const compactInputClass = `${inputClass} h-10 py-2`;
 const compactTextareaClass = `${textareaClass} min-h-[72px] py-2`;
+
+function statusDisplayLabel(status: string): string {
+  return statusLabels[status] || status.replace("_", " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
 
 function bookingTypeColourFor(
   booking: Booking,
@@ -214,9 +290,9 @@ function bookingTypeIconFor(
 const statusControlStyles: Record<string, string> = {
   confirmed:
     "!border-success-200 !bg-success-50 !text-success-600 dark:!border-success-500/20 dark:!bg-success-500/15 dark:!text-success-500",
-  approved:
-    "!border-success-200 !bg-success-50 !text-success-600 dark:!border-success-500/20 dark:!bg-success-500/15 dark:!text-success-500",
   pending:
+    "!border-warning-200 !bg-warning-50 !text-warning-600 dark:!border-warning-500/20 dark:!bg-warning-500/15 dark:!text-orange-400",
+  waitlist:
     "!border-warning-200 !bg-warning-50 !text-warning-600 dark:!border-warning-500/20 dark:!bg-warning-500/15 dark:!text-orange-400",
   seated:
     "!border-blue-light-200 !bg-blue-light-50 !text-blue-light-500 dark:!border-blue-light-500/20 dark:!bg-blue-light-500/15 dark:!text-blue-light-500",
@@ -240,7 +316,7 @@ function customerNoticeForStatusChange(previousStatus: string, nextStatus: strin
   }
 
   const message =
-    nextStatus === "confirmed" || nextStatus === "approved"
+    nextStatus === "confirmed"
       ? "This booking is now confirmed. Do you want to draft a confirmation reply for the customer?"
       : nextStatus === "declined"
         ? "This booking has been declined. Do you want to draft a polite reply for the customer?"
@@ -325,54 +401,12 @@ function parseTableIds(value?: string | null): string[] {
     : [];
 }
 
-function reservableTable(table: TableRecord): boolean {
-  return Boolean(Number(table.active));
+function truthy(value: number | boolean | string | undefined | null): boolean {
+  return value === true || value === 1 || value === "1";
 }
 
-function FunctionAreaPicker({
-  areas,
-  selectedIds,
-  onChange,
-}: {
-  areas: Area[];
-  selectedIds: string[];
-  onChange: (ids: string[]) => void;
-}) {
-  const selected = new Set(selectedIds);
-
-  const toggleArea = (areaId: string) => {
-    if (selected.has(areaId)) {
-      onChange(selectedIds.filter((id) => id !== areaId));
-      return;
-    }
-
-    onChange([...selectedIds, areaId]);
-  };
-
-  return (
-    <div className="grid gap-2 sm:grid-cols-2">
-      {areas.map((area) => {
-        const id = String(area.id);
-        const isSelected = selected.has(id);
-
-        return (
-          <button
-            key={area.id}
-            type="button"
-            aria-pressed={isSelected}
-            onClick={() => toggleArea(id)}
-            className={`h-10 rounded-lg border px-3 text-left text-sm font-medium transition ${
-              isSelected
-                ? "border-brand-500 bg-brand-50 text-brand-700 shadow-theme-xs dark:bg-brand-500/15 dark:text-brand-400"
-                : "border-gray-300 bg-white text-gray-700 hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-300 dark:hover:bg-white/5"
-            }`}
-          >
-            {area.name}
-          </button>
-        );
-      })}
-    </div>
-  );
+function reservableTable(table: TableRecord): boolean {
+  return Boolean(Number(table.active));
 }
 
 function TablePicker({
@@ -603,6 +637,27 @@ function bookingDurationMinutes(booking: Booking | null | undefined, fallback: n
   return duration > 0 ? duration : fallback;
 }
 
+function timeFromMinutes(totalMinutes: number): string {
+  const normalized = ((totalMinutes % (24 * 60)) + 24 * 60) % (24 * 60);
+  const hours = Math.floor(normalized / 60);
+  const minutes = normalized % 60;
+
+  return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
+}
+
+function endTimeFromStart(startTime: string, durationMinutes: number): string {
+  if (!startTime) return "";
+
+  return timeFromMinutes(minutesFromTime(startTime) + durationMinutes);
+}
+
+function durationFromTimeRange(startTime: string, endTime: string, fallbackMinutes: number): number {
+  if (!startTime || !endTime) return fallbackMinutes;
+
+  const duration = minutesFromTime(endTime) - minutesFromTime(startTime);
+  return duration > 0 ? duration : fallbackMinutes;
+}
+
 function bookingTimeValue(booking: Booking): number {
   return Date.parse(`${booking.booking_date}T${booking.start_time.slice(0, 5)}:00`) || 0;
 }
@@ -646,7 +701,7 @@ function sortedBookings(bookings: Booking[], sortKey: SortKey): Booking[] {
 
 function bookingBlocksTableAvailability(booking: Booking): boolean {
   if (booking.booking_type === "function") {
-    return ["approved", "confirmed"].includes(booking.status);
+    return ["confirmed", "seated", "completed"].includes(booking.status);
   }
 
   return !["cancelled", "no_show", "declined", "waitlist"].includes(booking.status);
@@ -828,14 +883,11 @@ function groupBookings(bookings: Booking[], bookingTypes: BookingType[] = []): B
 }
 
 function statusOptionsFor(booking: Booking) {
-  const options =
-    booking.booking_type === "function"
-      ? functionStatuses
-      : booking.booking_type === "event"
-        ? eventStatuses
-        : tableStatuses;
+  return statusOptionsForMode(booking.booking_type, booking.status);
+}
 
-  return options.includes(booking.status) ? options : [booking.status, ...options];
+function statusOptionsForMode(_mode: Booking["booking_type"], currentStatus: string) {
+  return bookingStatuses.includes(currentStatus) ? bookingStatuses : [currentStatus, ...bookingStatuses];
 }
 
 function formatDisplayTime(time: string): string {
@@ -890,6 +942,457 @@ function totalGuests(bookings: Booking[]): number {
 
 function pluralize(count: number, label: string): string {
   return `${count} ${label}${count === 1 ? "" : "s"}`;
+}
+
+function bookingAreaLabel(booking: Booking): string {
+  return (
+    booking.assigned_area_names ||
+    booking.assigned_area_name ||
+    booking.preferred_area_name ||
+    booking.event_reserved_area_names ||
+    ""
+  );
+}
+
+function bookingTableLabel(booking: Booking): string {
+  const areaLabel = bookingAreaLabel(booking);
+
+  if (booking.table_numbers) {
+    return `Table ${booking.table_numbers}`;
+  }
+
+  if (booking.booking_type === "event") {
+    return "No table";
+  }
+
+  if (booking.booking_type === "function") {
+    return areaLabel || "Unassigned";
+  }
+
+  return "Unassigned";
+}
+
+function bookingCanBeTableMarked(booking: Booking): boolean {
+  return Boolean(booking.id);
+}
+
+function bookingCanBulkUpdateReserveSign(booking: Booking): boolean {
+  return bulkReserveSignStatuses.has(booking.status);
+}
+
+function bookingNeedsBulkReserveSign(booking: Booking): boolean {
+  return bookingCanBulkUpdateReserveSign(booking) && !truthy(booking.table_marked);
+}
+
+function bookingServiceLabel(booking: Booking): string {
+  if (booking.booking_type_name) {
+    return booking.booking_type_name;
+  }
+
+  if (booking.booking_type === "function") {
+    return booking.event_type || "Function";
+  }
+
+  if (booking.booking_type === "event") {
+    return booking.event_type || "Event";
+  }
+
+  return minutesFromTime(booking.start_time) < 17 * 60 ? "Lunch" : "Dinner";
+}
+
+function bookingModeFromBookingType(
+  bookingType: BookingType | null | undefined,
+  fallback: Booking["booking_type"] = "table",
+): Booking["booking_type"] {
+  if (!bookingType) return fallback;
+  if (bookingType.category === "dining") return "table";
+  if (bookingType.category === "function") return "function";
+  return "event";
+}
+
+function bookingTypeReservedAreaIds(bookingType: BookingType | null | undefined): string[] {
+  const reservedAreaIds = bookingType?.schedule?.reserved_area_ids;
+  if (Array.isArray(reservedAreaIds)) {
+    return reservedAreaIds.map(String).filter(Boolean);
+  }
+
+  const reservedAreaIdsJson = bookingType?.schedule?.reserved_area_ids_json;
+  if (reservedAreaIdsJson) {
+    try {
+      const parsed = JSON.parse(reservedAreaIdsJson);
+      return Array.isArray(parsed) ? parsed.map(String).filter(Boolean) : [];
+    } catch {
+      return [];
+    }
+  }
+
+  return [];
+}
+
+function formatDateTimeLabel(value?: string): string {
+  if (!value) return "-";
+
+  const parsed = new Date(value.replace(" ", "T"));
+  if (Number.isNaN(parsed.getTime())) return value;
+
+  return parsed.toLocaleString("en-AU", {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
+function DetailItem({
+  label,
+  children,
+  icon: Icon,
+  className = "",
+}: {
+  label: string;
+  children: ReactNode;
+  icon?: LucideIcon;
+  className?: string;
+}) {
+  return (
+    <div className={`flex gap-3 ${className}`}>
+      {Icon ? (
+        <span className="mt-0.5 flex size-9 shrink-0 items-center justify-center rounded-lg bg-gray-50 text-gray-500 ring-1 ring-gray-100 dark:bg-white/[0.04] dark:text-gray-400 dark:ring-white/[0.08]">
+          <Icon className="size-4" />
+        </span>
+      ) : null}
+      <div className="min-w-0">
+        <dt className="text-sm font-medium text-gray-500 dark:text-gray-400">{label}</dt>
+        <dd className="mt-1 break-words text-sm font-semibold text-gray-950 dark:text-white/90">{children}</dd>
+      </div>
+    </div>
+  );
+}
+
+function DetailSection({
+  title,
+  icon: Icon,
+  iconClassName,
+  children,
+  className = "",
+}: {
+  title: string;
+  icon: LucideIcon;
+  iconClassName: string;
+  children: ReactNode;
+  className?: string;
+}) {
+  return (
+    <section className={`rounded-lg border border-gray-200 bg-white p-5 shadow-theme-xs dark:border-gray-800 dark:bg-white/[0.03] ${className}`}>
+      <div className="mb-5 flex items-center gap-3">
+        <span className={`flex size-9 items-center justify-center rounded-lg ${iconClassName}`}>
+          <Icon className="size-4" />
+        </span>
+        <h3 className="text-base font-semibold text-gray-950 dark:text-white">{title}</h3>
+      </div>
+      {children}
+    </section>
+  );
+}
+
+function ReadOnlyEditControl({
+  label,
+  children,
+  icon: Icon,
+}: {
+  label: string;
+  children: ReactNode;
+  icon?: LucideIcon;
+}) {
+  return (
+    <div className="min-w-0">
+      <span className="mb-1.5 block text-sm font-medium text-gray-700 dark:text-gray-300">{label}</span>
+      <div className="flex h-10 items-center gap-2 rounded-lg border border-gray-300 bg-gray-50 px-3 text-sm font-medium text-gray-800 shadow-theme-xs dark:border-gray-700 dark:bg-white/[0.03] dark:text-white/90">
+        {Icon ? <Icon className="size-4 shrink-0 text-gray-400" /> : null}
+        <span className="min-w-0 truncate">{children}</span>
+      </div>
+    </div>
+  );
+}
+
+function ActivityItem({
+  tone,
+  date,
+  title,
+  byline,
+}: {
+  tone: "success" | "brand" | "muted";
+  date: string;
+  title: string;
+  byline: string;
+}) {
+  const dotClass =
+    tone === "success" ? "bg-success-500" : tone === "brand" ? "bg-brand-500" : "bg-gray-400";
+
+  return (
+    <li className="grid grid-cols-[16px_minmax(0,1fr)_minmax(130px,0.75fr)] gap-3 text-sm">
+      <span className={`mt-2 size-2 rounded-full ${dotClass}`} />
+      <span className="min-w-0 text-gray-500 dark:text-gray-400">{date}</span>
+      <span className="min-w-0">
+        <span className="block font-semibold text-gray-950 dark:text-white/90">{title}</span>
+        <span className="mt-1 block text-xs font-medium text-gray-500 dark:text-gray-400">{byline}</span>
+      </span>
+    </li>
+  );
+}
+
+const bookingActivityEntityTypes = ["booking", "event_booking", "function_booking", "function_request"];
+
+function titleCaseAction(action: string): string {
+  return action
+    .split("_")
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function parseActivityDetails(log: ActivityLog): Record<string, unknown> {
+  if (!log.details_json) return {};
+
+  try {
+    const details = JSON.parse(log.details_json);
+    return details && typeof details === "object" && !Array.isArray(details) ? details : {};
+  } catch {
+    return {};
+  }
+}
+
+function bookingActivityTitle(log: ActivityLog): string {
+  if (log.action === "created") return "Booking created";
+  if (log.action === "updated") {
+    const details = parseActivityDetails(log);
+    if (typeof details.change_summary === "string" && details.change_summary.trim()) {
+      return details.change_summary.trim();
+    }
+    if (Array.isArray(details.changes)) {
+      const changes = details.changes.filter((change): change is string => typeof change === "string" && change.trim() !== "");
+      if (changes.length) {
+        return changes.join("; ");
+      }
+    }
+
+    return "Booking updated";
+  }
+  if (log.action === "drafted_ai_reply") return "Reply drafted";
+  if (log.action === "logged_ai_reply") return "Reply logged";
+
+  return titleCaseAction(log.action);
+}
+
+function bookingActivityByline(log: ActivityLog): string {
+  const details = parseActivityDetails(log);
+  if (typeof details.staff_name === "string" && details.staff_name.trim()) {
+    return `by ${details.staff_name.trim()}`;
+  }
+  if (log.user_name) return `by ${log.user_name}`;
+
+  if (details.source === "public") return "from public booking";
+  if (details.source === "manager") return "by manager";
+
+  return "by System";
+}
+
+function bookingActivityTone(log: ActivityLog): "success" | "brand" | "muted" {
+  if (log.action === "updated") return "success";
+  if (log.action === "created") return "brand";
+
+  return "muted";
+}
+
+function BookingDetailsPanel({ booking }: { booking: Booking }) {
+  const [activityLogs, setActivityLogs] = useState<ActivityLog[]>([]);
+  const [activityLoading, setActivityLoading] = useState(false);
+  const areaLabel = bookingAreaLabel(booking);
+  const tableLabel = bookingTableLabel(booking);
+  const showAreaLabel = areaLabel && areaLabel !== tableLabel;
+  const timeRange = booking.end_time
+    ? `${formatDisplayTime(booking.start_time)} - ${formatDisplayTime(booking.end_time)}`
+    : formatDisplayTime(booking.start_time);
+  const ServiceIcon = getBookingIcon(booking.booking_type_icon, booking.booking_type === "table" ? Utensils : CalendarCheck);
+  const serviceColour = bookingTypeColourVars(booking.booking_type_colour);
+  const canMarkTable = bookingCanBeTableMarked(booking);
+  const tableMarked = truthy(booking.table_marked);
+  const guestNotes = [booking.notes, booking.custom_answers_summary].filter(Boolean).join("\n");
+
+  useEffect(() => {
+    let cancelled = false;
+    setActivityLoading(true);
+
+    const params = new URLSearchParams({
+      entity_id: String(booking.id),
+      entity_types: bookingActivityEntityTypes.join(","),
+      limit: "20",
+    });
+
+    apiFetch<{ items: ActivityLog[] }>(`activity-logs?${params.toString()}`)
+      .then((response) => {
+        if (!cancelled) {
+          setActivityLogs(response.items || []);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setActivityLogs([]);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setActivityLoading(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [booking.id, booking.updated_at]);
+
+  return (
+    <div className="max-h-[calc(100vh-8rem)] overflow-y-auto bg-gray-50/40 p-5 dark:bg-white/[0.01]">
+      <div className="grid items-stretch gap-5 xl:grid-cols-[minmax(0,1fr)_380px]">
+        <div className="grid gap-5">
+          <section className="rounded-lg border border-gray-200 bg-white p-5 shadow-theme-xs dark:border-gray-800 dark:bg-white/[0.03]">
+            <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_150px_150px_150px] lg:items-center">
+              <div className="flex min-w-0 items-center gap-4">
+                <span
+                  className="flex size-16 shrink-0 items-center justify-center rounded-lg bg-[color-mix(in_srgb,var(--booking-type-colour)_12%,white)] text-[var(--booking-type-colour)]"
+                  style={serviceColour}
+                >
+                  <ServiceIcon className="size-7" />
+                </span>
+                <div className="min-w-0">
+                  <h3 className="truncate text-2xl font-semibold text-gray-950 dark:text-white">
+                    {booking.customer_name}
+                  </h3>
+                  <p className="mt-1 text-sm font-semibold text-gray-500 dark:text-gray-400">
+                    {bookingServiceLabel(booking)}
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-3 border-gray-100 lg:border-l lg:pl-5 dark:border-gray-800">
+                <Users className="size-5 text-gray-500" />
+                <div>
+                  <p className="text-sm font-semibold text-gray-950 dark:text-white/90">{pluralize(Number(booking.guest_count || 0), "guest")}</p>
+                  <p className="text-xs font-medium text-gray-500 dark:text-gray-400">Party size</p>
+                </div>
+              </div>
+              <div className="flex items-center gap-3 border-gray-100 lg:border-l lg:pl-5 dark:border-gray-800">
+                <Table2 className="size-5 text-gray-500" />
+                <div>
+                  <p className="flex items-center gap-2 text-sm font-semibold text-gray-950 dark:text-white/90">
+                    <span>{tableLabel}</span>
+                    {canMarkTable ? (
+                      <span
+                        title={tableMarked ? "Reserve Sign placed" : "Reserve Sign not placed"}
+                        className={`inline-flex size-6 items-center justify-center rounded-md ${
+                          tableMarked
+                            ? "bg-success-50 text-success-700 dark:bg-success-500/15 dark:text-success-300"
+                            : "bg-warning-50 text-warning-700 dark:bg-warning-500/15 dark:text-orange-300"
+                        }`}
+                      >
+                        <TableProperties className="size-3.5" />
+                      </span>
+                    ) : null}
+                  </p>
+                  <p className="text-xs font-medium text-gray-500 dark:text-gray-400">{showAreaLabel ? areaLabel : "Table"}</p>
+                </div>
+              </div>
+              <div className="flex items-center gap-3 border-gray-100 lg:border-l lg:pl-5 dark:border-gray-800">
+                <Tag className="size-5 text-gray-500" />
+                <div>
+                  <p className="text-sm font-semibold text-gray-950 dark:text-white/90">{bookingServiceLabel(booking)}</p>
+                  <p className="text-xs font-medium text-gray-500 dark:text-gray-400">Booking type</p>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <DetailSection title="Reservation" icon={Calendar} iconClassName="bg-success-50 text-success-600 dark:bg-success-500/15 dark:text-success-400">
+            <dl className="grid gap-x-6 gap-y-8 sm:grid-cols-3">
+              <DetailItem label="Date" icon={CalendarDays}>{formatDisplayDate(booking.booking_date)}</DetailItem>
+              <DetailItem label="Time" icon={Clock}>{timeRange}</DetailItem>
+              <DetailItem label="Preferences" icon={MapPin}>{booking.preferred_area_name || "-"}</DetailItem>
+            </dl>
+          </DetailSection>
+        </div>
+
+        <DetailSection title="Guest & Contact" icon={UserRound} iconClassName="bg-purple-50 text-purple-700 dark:bg-purple-500/15 dark:text-purple-300" className="h-full">
+          <dl className="grid gap-5">
+            <DetailItem label="Name" icon={UserRound}>{booking.customer_name}</DetailItem>
+            <DetailItem label="Phone" icon={Phone}>{booking.customer_phone || "-"}</DetailItem>
+            <DetailItem label="Email" icon={Mail}>{booking.customer_email || "-"}</DetailItem>
+          </dl>
+        </DetailSection>
+
+        <DetailSection title="Notes" icon={FileText} iconClassName="bg-warning-50 text-warning-600 dark:bg-warning-500/15 dark:text-orange-300" className="h-[252px]">
+          <dl className="grid h-[140px] items-stretch gap-x-8 gap-y-6 lg:grid-cols-2">
+            <div className="min-h-0 rounded-lg border border-gray-100 bg-gray-50/70 p-4 dark:border-gray-800 dark:bg-white/[0.03]">
+              <dt className="text-sm font-medium text-gray-500 dark:text-gray-400">Guest notes</dt>
+              <dd className="mt-3 max-h-[70px] overflow-y-auto whitespace-pre-line pr-1 text-sm font-semibold text-gray-950 dark:text-white/90">
+                {guestNotes || "-"}
+              </dd>
+            </div>
+            <div className="min-h-0 rounded-lg border border-gray-100 bg-gray-50/70 p-4 dark:border-gray-800 dark:bg-white/[0.03]">
+              <dt className="text-sm font-medium text-gray-500 dark:text-gray-400">Staff notes</dt>
+              <dd className="mt-3 max-h-[70px] overflow-y-auto whitespace-pre-line pr-1 text-sm font-semibold text-gray-950 dark:text-white/90">
+                {booking.staff_notes || "-"}
+              </dd>
+            </div>
+          </dl>
+        </DetailSection>
+
+        <DetailSection title="Activity" icon={History} iconClassName="bg-blue-light-50 text-blue-light-600 dark:bg-blue-light-500/15 dark:text-blue-light-300" className="flex h-[252px] flex-col overflow-hidden">
+          <ol className="min-h-0 flex-1 space-y-3 overflow-y-auto pr-1">
+            {activityLoading && !activityLogs.length ? (
+              <li className="text-sm font-medium text-gray-500 dark:text-gray-400">Loading activity...</li>
+            ) : null}
+            {activityLogs.length ? (
+              activityLogs.map((log) => (
+                <ActivityItem
+                  key={log.id}
+                  tone={bookingActivityTone(log)}
+                  date={formatDateTimeLabel(log.created_at)}
+                  title={bookingActivityTitle(log)}
+                  byline={bookingActivityByline(log)}
+                />
+              ))
+            ) : (
+              <>
+                {booking.updated_at ? (
+                  <ActivityItem
+                    tone="success"
+                    date={formatDateTimeLabel(booking.updated_at)}
+                    title="Booking updated"
+                    byline={booking.staff_name ? `by ${booking.staff_name}` : "by manager"}
+                  />
+                ) : null}
+                {booking.created_at ? (
+                  <ActivityItem
+                    tone="brand"
+                    date={formatDateTimeLabel(booking.created_at)}
+                    title="Booking created"
+                    byline={booking.booking_type === "event" ? "from event booking" : booking.booking_type === "function" ? "from function request" : "from table booking"}
+                  />
+                ) : null}
+              </>
+            )}
+            <ActivityItem
+              tone="muted"
+              date={formatDisplayDate(booking.booking_date)}
+              title={`${bookingServiceLabel(booking)} scheduled`}
+              byline={timeRange}
+            />
+          </ol>
+        </DetailSection>
+      </div>
+    </div>
+  );
 }
 
 function SortDropdown({
@@ -1146,13 +1649,13 @@ function BookingTableColumns() {
   return (
     <colgroup>
       <col className="w-[12%]" />
-      <col className="w-[15%]" />
+      <col className="w-[16%]" />
       <col className="w-[7%]" />
       <col className="w-[14%]" />
       <col className="w-[13%]" />
-      <col className="w-[17%]" />
       <col className="w-[16%]" />
-      <col className="w-[6%]" />
+      <col className="w-[13%]" />
+      <col className="w-[9%]" />
     </colgroup>
   );
 }
@@ -1160,83 +1663,94 @@ function BookingTableColumns() {
 function BookingRow({
   booking,
   statusValue,
+  tableMarkedValue,
+  isTableMarkSaving,
   onStatusChange,
-  onEdit,
+  onTableMarkToggle,
+  onOpen,
 }: {
   booking: Booking;
   statusValue: string;
+  tableMarkedValue?: boolean;
+  isTableMarkSaving?: boolean;
   onStatusChange: (value: string) => void;
-  onEdit: () => void;
+  onTableMarkToggle: (value: boolean) => void;
+  onOpen: () => void;
 }) {
-  const areaLabel =
-    booking.assigned_area_names ||
-    booking.assigned_area_name ||
-    booking.preferred_area_name ||
-    booking.event_reserved_area_names ||
-    "";
-  const tableLabel = booking.table_numbers
-    ? `Table ${booking.table_numbers}`
-    : booking.booking_type === "event"
-      ? "No table"
-      : booking.booking_type === "function"
-      ? areaLabel || "Unassigned"
-      : "Unassigned";
+  const areaLabel = bookingAreaLabel(booking);
+  const tableLabel = bookingTableLabel(booking);
   const showAreaLabel = areaLabel && areaLabel !== tableLabel;
+  const canMarkTable = bookingCanBeTableMarked(booking);
+  const tableMarked = tableMarkedValue ?? truthy(booking.table_marked);
   const detailText = [booking.custom_answers_summary, booking.notes, booking.event_type]
     .filter(Boolean)
     .join("\n");
 
   return (
-    <TableRow className="bg-white align-top dark:bg-transparent">
-      <TableCell className="px-5 py-4 text-start">
-        <p className="whitespace-nowrap font-medium text-gray-800 text-theme-sm dark:text-white/90">
+    <TableRow
+      role="button"
+      tabIndex={0}
+      aria-label={`Open ${booking.booking_reference} details`}
+      onClick={onOpen}
+      onKeyDown={(event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          onOpen();
+        }
+      }}
+      className="cursor-pointer bg-white align-top transition hover:bg-gray-50/60 focus:outline-none focus:ring-2 focus:ring-brand-500/20 dark:bg-transparent dark:hover:bg-white/[0.03]"
+    >
+      <TableCell className="px-5 py-5 text-start">
+        <p className="whitespace-nowrap text-sm font-semibold text-gray-900 dark:text-white/90">
           {formatDisplayTime(booking.start_time)}
         </p>
         <p className="mt-1 whitespace-nowrap text-theme-xs text-gray-500 dark:text-gray-400">
           {formatDisplayDate(booking.booking_date)}
         </p>
       </TableCell>
-      <TableCell className="px-5 py-4 text-start">
-        <p className="font-medium text-gray-800 text-theme-sm dark:text-white/90">{booking.customer_name}</p>
+      <TableCell className="px-5 py-5 text-start">
+        <p className="font-semibold text-gray-900 text-theme-sm dark:text-white/90">{booking.customer_name}</p>
         <p className="mt-1 text-theme-xs text-gray-500 dark:text-gray-400">{booking.customer_phone || "-"}</p>
       </TableCell>
-      <TableCell className="px-5 py-4 text-start">
-        <div className="inline-flex items-center gap-2 font-medium text-gray-800 text-theme-sm dark:text-white/90">
+      <TableCell className="px-5 py-5 text-start">
+        <div className="inline-flex items-center gap-2 font-semibold text-gray-900 text-theme-sm dark:text-white/90">
           <User className="size-4 text-gray-400" />
           {booking.guest_count}
         </div>
       </TableCell>
-      <TableCell className="px-5 py-4 text-start">
-        <p className="font-medium text-gray-800 text-theme-sm dark:text-white/90">{tableLabel}</p>
+      <TableCell className="px-5 py-5 text-start">
+        <p className="font-semibold text-gray-900 text-theme-sm dark:text-white/90">{tableLabel}</p>
         {showAreaLabel ? (
           <p className="mt-1 text-theme-xs text-gray-500 dark:text-gray-400">{areaLabel}</p>
         ) : null}
       </TableCell>
-      <TableCell className="px-5 py-4 text-start">
-        <SelectInput
-          value={statusValue}
-          onChange={onStatusChange}
-          ariaLabel={`${booking.booking_reference} status`}
-          className="inline-flex min-w-[132px]"
-          buttonClassName={`!h-8 !rounded-full !py-1 !pl-3 !pr-2 text-center text-theme-xs font-medium capitalize ${
-            statusControlStyles[statusValue] || "border-gray-200 bg-gray-50 text-gray-700"
-          }`}
-          menuClassName="min-w-[160px]"
-          options={statusOptionsFor(booking).map((status) => ({
-            value: status,
-            label: status.replace("_", " "),
-          }))}
-        />
+      <TableCell className="px-5 py-5 text-start">
+        <div onClick={(event) => event.stopPropagation()} onKeyDown={(event) => event.stopPropagation()}>
+          <SelectInput
+            value={statusValue}
+            onChange={onStatusChange}
+            ariaLabel={`${booking.booking_reference} status`}
+            className="inline-flex min-w-[148px]"
+            buttonClassName={`!h-9 !rounded-lg !py-1 !pl-3 !pr-2 text-center text-theme-xs font-semibold capitalize ${
+              statusControlStyles[statusValue] || "border-gray-200 bg-gray-50 text-gray-700"
+            }`}
+            menuClassName="min-w-[160px]"
+            options={statusOptionsFor(booking).map((status) => ({
+              value: status,
+              label: statusDisplayLabel(status),
+            }))}
+          />
+        </div>
       </TableCell>
-      <TableCell className="px-5 py-4 text-start">
+      <TableCell className="px-5 py-5 text-start">
         <p
-          className="max-w-[220px] whitespace-pre-line text-theme-sm text-gray-500 dark:text-gray-400"
+          className="max-w-[220px] truncate text-theme-sm text-gray-500 dark:text-gray-400"
           title={detailText || "-"}
         >
           {detailText || "-"}
         </p>
       </TableCell>
-      <TableCell className="px-5 py-4 text-start">
+      <TableCell className="px-5 py-5 text-start">
         <p
           className="max-w-[220px] truncate text-theme-sm text-gray-500 dark:text-gray-400"
           title={booking.staff_notes || "-"}
@@ -1244,17 +1758,41 @@ function BookingRow({
           {booking.staff_notes || "-"}
         </p>
       </TableCell>
-      <TableCell className="px-5 py-4 text-start">
-        <div className="flex items-center justify-end gap-2">
-          <button
-            type="button"
-            className="inline-flex size-8 items-center justify-center rounded-lg text-gray-500 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-white/5"
-            title="Edit booking"
-            onClick={onEdit}
-          >
-            <MoreHorizontal className="size-4" />
-          </button>
-        </div>
+      <TableCell className="px-3 py-5 text-center">
+        <button
+          type="button"
+          disabled={!canMarkTable || isTableMarkSaving}
+          title={
+            canMarkTable
+              ? tableMarked
+                ? "Reserve Sign placed. Click to clear."
+                : "Reserve Sign not placed. Click once placed."
+              : "Reserve Sign unavailable"
+          }
+          aria-label={
+            canMarkTable
+              ? tableMarked
+                ? `Clear Reserve Sign for ${booking.booking_reference}`
+                : `Set Reserve Sign placed for ${booking.booking_reference}`
+              : `${booking.booking_reference} Reserve Sign is unavailable`
+          }
+          onClick={(event) => {
+            event.stopPropagation();
+            if (canMarkTable && !isTableMarkSaving) {
+              onTableMarkToggle(!tableMarked);
+            }
+          }}
+          onKeyDown={(event) => event.stopPropagation()}
+          className={`inline-flex size-9 items-center justify-center rounded-lg border transition ${
+            !canMarkTable
+              ? "cursor-not-allowed border-gray-200 bg-gray-50 text-gray-300 dark:border-gray-800 dark:bg-white/[0.03] dark:text-gray-600"
+              : tableMarked
+                ? "border-success-200 bg-success-50 text-success-700 hover:bg-success-100 dark:border-success-500/30 dark:bg-success-500/15 dark:text-success-300"
+                : "border-warning-200 bg-warning-50 text-warning-700 hover:bg-warning-100 dark:border-warning-500/30 dark:bg-warning-500/15 dark:text-orange-300"
+          } ${isTableMarkSaving ? "opacity-60" : ""}`}
+        >
+          <TableProperties className="size-4" />
+        </button>
       </TableCell>
     </TableRow>
   );
@@ -1270,8 +1808,17 @@ export default function BookingsPage() {
   const [form, setForm] = useState<ManualBookingForm>(emptyManualBooking);
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [editingBooking, setEditingBooking] = useState<Booking | null>(null);
+  const [bookingModalMode, setBookingModalMode] = useState<BookingModalMode>("view");
+  const [editActionsReady, setEditActionsReady] = useState(false);
+  const [isSavingEdit, setIsSavingEdit] = useState(false);
+  const [isCreateEndTimeManual, setIsCreateEndTimeManual] = useState(false);
+  const [isEditEndTimeManual, setIsEditEndTimeManual] = useState(false);
+  const [isEditTablePickerOpen, setIsEditTablePickerOpen] = useState(false);
   const [editForm, setEditForm] = useState<ManualBookingForm>(emptyManualBooking);
   const [statusEdits, setStatusEdits] = useState<Record<number, string>>({});
+  const [tableMarkEdits, setTableMarkEdits] = useState<Record<number, boolean | undefined>>({});
+  const [bulkReserveSignGroupKey, setBulkReserveSignGroupKey] = useState<string | null>(null);
+  const [reserveSignConfirm, setReserveSignConfirm] = useState<ReserveSignConfirmState | null>(null);
   const [sortKey, setSortKey] = useState<SortKey>("time_earliest");
   const [isSortOpen, setIsSortOpen] = useState(false);
   const [expandedGroups, setExpandedGroups] = useState<Record<BookingGroup["key"], boolean>>({
@@ -1365,7 +1912,7 @@ export default function BookingsPage() {
   }, [isCreateOpen, form.date]);
 
   useEffect(() => {
-    if (!editingBooking || !editForm.date) {
+    if (!editingBooking || bookingModalMode !== "edit" || !editForm.date) {
       setEditAvailability({ items: [], loading: false });
       return undefined;
     }
@@ -1399,23 +1946,33 @@ export default function BookingsPage() {
     return () => {
       cancelled = true;
     };
-  }, [editingBooking, editForm.date]);
+  }, [bookingModalMode, editingBooking, editForm.date]);
 
   const groupedBookings = useMemo(
     () => groupBookings(sortedBookings(data?.items || [], sortKey), meta?.booking_types || []),
     [data, meta?.booking_types, sortKey],
   );
   const defaultDurationMinutes = Number(meta?.settings.default_duration_minutes || 120);
-  const editDurationMinutes = bookingDurationMinutes(editingBooking, defaultDurationMinutes);
+  const selectedCreateBookingType = (meta?.booking_types || []).find((type) => String(type.id) === form.booking_type_id);
+  const selectedCreateMode = bookingModeFromBookingType(selectedCreateBookingType, "table");
+  const selectedEditBookingType = (meta?.booking_types || []).find((type) => String(type.id) === editForm.booking_type_id);
+  const selectedEditMode = editingBooking
+    ? bookingModeFromBookingType(selectedEditBookingType, editingBooking.booking_type)
+    : "table";
+  const autoCreateDurationMinutes = Math.max(Number(selectedCreateBookingType?.schedule?.duration_minutes || defaultDurationMinutes), 15);
+  const createDurationMinutes = durationFromTimeRange(form.time, form.end_time, autoCreateDurationMinutes);
+  const autoEditDurationMinutes = bookingDurationMinutes(editingBooking, defaultDurationMinutes);
+  const editDurationMinutes = durationFromTimeRange(editForm.time, editForm.end_time, autoEditDurationMinutes);
   const createTableAvailability = useMemo(
     () =>
       buildTableAvailability({
         bookings: createAvailability.items,
         date: form.date,
         time: form.time,
-        durationMinutes: defaultDurationMinutes,
+        durationMinutes: createDurationMinutes,
+        contextBookingType: selectedCreateMode,
       }),
-    [createAvailability.items, defaultDurationMinutes, form.date, form.time],
+    [createAvailability.items, createDurationMinutes, form.date, form.time, selectedCreateMode],
   );
   const editTableAvailability = useMemo(
     () =>
@@ -1425,10 +1982,10 @@ export default function BookingsPage() {
         time: editForm.time,
         durationMinutes: editDurationMinutes,
         excludeBookingId: editingBooking?.id,
-        contextBookingType: editingBooking?.booking_type,
+        contextBookingType: selectedEditMode,
         contextBookingSessionId: editingBooking?.booking_session_id ?? null,
       }),
-    [editAvailability.items, editDurationMinutes, editForm.date, editForm.time, editingBooking?.booking_session_id, editingBooking?.booking_type, editingBooking?.id],
+    [editAvailability.items, editDurationMinutes, editForm.date, editForm.time, editingBooking?.booking_session_id, editingBooking?.id, selectedEditMode],
   );
   const createAvailabilityKey = tableAvailabilityKey(createTableAvailability);
   const editAvailabilityKey = tableAvailabilityKey(editTableAvailability);
@@ -1445,7 +2002,19 @@ export default function BookingsPage() {
   }, [createAvailabilityKey, createTableAvailability, isCreateOpen, tablesData]);
 
   useEffect(() => {
-    if (!editingBooking || !tablesData) return;
+    if (!isCreateOpen || isCreateEndTimeManual) return;
+
+    const nextEndTime = endTimeFromStart(form.time, autoCreateDurationMinutes);
+    if (!nextEndTime || form.end_time === nextEndTime) return;
+
+    setForm((current) => (
+      current.end_time === nextEndTime ? current : { ...current, end_time: nextEndTime }
+    ));
+  }, [autoCreateDurationMinutes, form.end_time, form.time, isCreateEndTimeManual, isCreateOpen]);
+
+  useEffect(() => {
+    if (!editingBooking || bookingModalMode !== "edit" || !tablesData) return;
+    if (selectedEditMode === "function") return;
 
     setEditForm((current) => {
       const availableIds = current.table_ids.filter(
@@ -1453,7 +2022,34 @@ export default function BookingsPage() {
       );
       return availableIds.length === current.table_ids.length ? current : { ...current, table_ids: availableIds };
     });
-  }, [editAvailabilityKey, editTableAvailability, editingBooking, tablesData]);
+  }, [bookingModalMode, editAvailabilityKey, editTableAvailability, editingBooking, selectedEditMode, tablesData]);
+
+  useEffect(() => {
+    if (!editingBooking || bookingModalMode !== "edit" || isEditEndTimeManual) return;
+
+    const nextEndTime = endTimeFromStart(editForm.time, autoEditDurationMinutes);
+    if (!nextEndTime || editForm.end_time === nextEndTime) return;
+
+    setEditForm((current) => (
+      current.end_time === nextEndTime ? current : { ...current, end_time: nextEndTime }
+    ));
+  }, [autoEditDurationMinutes, bookingModalMode, editForm.end_time, editForm.time, editingBooking, isEditEndTimeManual]);
+
+  useEffect(() => {
+    if (!editingBooking || bookingModalMode !== "edit") {
+      setEditActionsReady(false);
+      return undefined;
+    }
+
+    const readyTimer = window.setTimeout(() => setEditActionsReady(true), 250);
+    return () => window.clearTimeout(readyTimer);
+  }, [bookingModalMode, editingBooking]);
+
+  useEffect(() => {
+    if (selectedEditMode === "function") {
+      setIsEditTablePickerOpen(false);
+    }
+  }, [selectedEditMode]);
 
   const updateForm = <K extends keyof ManualBookingForm>(field: K, value: ManualBookingForm[K]) => {
     setForm((current) => ({ ...current, [field]: value }));
@@ -1466,10 +2062,63 @@ export default function BookingsPage() {
     setEditForm((current) => ({ ...current, [field]: value }));
   };
 
+  const updateCreateBookingType = (bookingTypeId: string) => {
+    const bookingType = (meta?.booking_types || []).find((type) => String(type.id) === bookingTypeId);
+    const nextMode = bookingModeFromBookingType(bookingType, "table");
+
+    setIsCreateEndTimeManual(false);
+    setForm((current) => ({
+      ...current,
+      booking_type_id: bookingTypeId,
+      table_ids: nextMode === "function" ? [] : current.table_ids,
+      assigned_area_id: nextMode === "function" ? current.assigned_area_id : "",
+      assigned_area_ids:
+        nextMode === "function"
+          ? current.assigned_area_ids.length
+            ? current.assigned_area_ids
+            : current.assigned_area_id
+              ? [current.assigned_area_id]
+              : []
+          : [],
+      event_type: nextMode === "table" ? "" : bookingType?.name || current.event_type || "",
+    }));
+  };
+
+  const updateEditBookingType = (bookingTypeId: string) => {
+    const bookingType = (meta?.booking_types || []).find((type) => String(type.id) === bookingTypeId);
+    const nextMode = bookingModeFromBookingType(bookingType, editingBooking?.booking_type || "table");
+
+    if (nextMode === "function") {
+      setIsEditTablePickerOpen(false);
+    }
+
+    setEditForm((current) => ({
+      ...current,
+      booking_type_id: bookingTypeId,
+      table_ids: nextMode === "function" ? [] : current.table_ids,
+      assigned_area_id: nextMode === "function" ? current.assigned_area_id : "",
+      assigned_area_ids:
+        nextMode === "function"
+          ? current.assigned_area_ids.length
+            ? current.assigned_area_ids
+            : current.assigned_area_id
+              ? [current.assigned_area_id]
+              : []
+          : [],
+      event_type: nextMode === "function" ? current.event_type || bookingType?.name || "" : current.event_type,
+    }));
+  };
+
   const openCreateModal = () => {
+    const defaultBookingType = (meta?.booking_types || []).find((type) => Number(type.is_active) === 1);
+    const defaultMode = bookingModeFromBookingType(defaultBookingType, "table");
+
     setModalMessage(null);
+    setIsCreateEndTimeManual(false);
     setForm({
       ...emptyManualBooking,
+      booking_type_id: defaultBookingType ? String(defaultBookingType.id) : "",
+      event_type: defaultMode === "table" ? "" : defaultBookingType?.name || "",
       date: todayIso(),
       time: "18:00",
       guest_count: "8",
@@ -1479,32 +2128,55 @@ export default function BookingsPage() {
 
   const closeCreateModal = () => {
     setModalMessage(null);
+    setIsCreateEndTimeManual(false);
     setIsCreateOpen(false);
   };
 
-  const openEditModal = (booking: Booking) => {
+  const openBookingModal = (booking: Booking, mode: BookingModalMode = "view") => {
     setModalMessage(null);
+    setIsSavingEdit(false);
+    setIsEditEndTimeManual(false);
+    setIsEditTablePickerOpen(false);
     setEditingBooking(booking);
-    setEditForm({
-      name: booking.customer_name || "",
-      email: booking.customer_email || "",
-      phone: booking.customer_phone || "",
-      date: booking.booking_date || "",
-      time: booking.start_time?.slice(0, 5) || "",
-      guest_count: String(booking.guest_count || ""),
-      table_ids: parseTableIds(booking.table_ids),
-      assigned_area_id: booking.assigned_area_id ? String(booking.assigned_area_id) : "",
-      assigned_area_ids: parseTableIds(booking.assigned_area_ids || (booking.assigned_area_id ? String(booking.assigned_area_id) : "")),
-      notes: booking.notes || "",
-      staff_notes: booking.staff_notes || "",
-      status: booking.status,
-      event_type: booking.event_type || "",
-    });
+    setBookingModalMode(mode);
+    setEditActionsReady(mode === "edit");
+    setEditForm(editFormFromBooking(booking));
   };
 
   const closeEditModal = () => {
     setModalMessage(null);
+    setIsSavingEdit(false);
+    setIsEditEndTimeManual(false);
+    setIsEditTablePickerOpen(false);
+    setEditActionsReady(false);
     setEditingBooking(null);
+    setBookingModalMode("view");
+    setEditForm(emptyManualBooking);
+  };
+
+  const startEditBooking = (event?: React.MouseEvent<HTMLButtonElement>) => {
+    event?.preventDefault();
+    event?.stopPropagation();
+    if (!editingBooking) return;
+    setModalMessage(null);
+    setIsSavingEdit(false);
+    setIsEditEndTimeManual(false);
+    setIsEditTablePickerOpen(false);
+    setEditActionsReady(false);
+    setEditForm(editFormFromBooking(editingBooking));
+    setBookingModalMode("edit");
+  };
+
+  const cancelEditBooking = () => {
+    if (editingBooking) {
+      setEditForm(editFormFromBooking(editingBooking));
+    }
+    setModalMessage(null);
+    setIsSavingEdit(false);
+    setIsEditEndTimeManual(false);
+    setIsEditTablePickerOpen(false);
+    setEditActionsReady(false);
+    setBookingModalMode("view");
   };
 
   const openReplyFromPrompt = (booking: Booking, purpose: ReplyPurpose) => {
@@ -1561,7 +2233,19 @@ export default function BookingsPage() {
     setModalMessage(null);
 
     try {
-      if (!form.table_ids.length) {
+      const submittedEndTime = form.end_time || endTimeFromStart(form.time, createDurationMinutes);
+
+      if (!submittedEndTime || minutesFromTime(submittedEndTime) <= minutesFromTime(form.time)) {
+        setModalMessage({ type: "error", text: "End time must be after the start time." });
+        return;
+      }
+
+      if (selectedCreateMode === "function" && !form.assigned_area_ids.length) {
+        setModalMessage({ type: "error", text: "Select at least one function area." });
+        return;
+      }
+
+      if (selectedCreateMode !== "function" && !form.table_ids.length) {
         setModalMessage({ type: "error", text: "Select at least one table." });
         return;
       }
@@ -1571,7 +2255,13 @@ export default function BookingsPage() {
         ...toJsonBody({
           ...form,
           guest_count: Number(form.guest_count),
+          end_time: submittedEndTime,
+          booking_type_id: form.booking_type_id ? Number(form.booking_type_id) : undefined,
           table_ids: form.table_ids.map(Number),
+          table_marked: createCanMarkTable && form.table_marked,
+          assigned_area_ids: form.assigned_area_ids.map(Number),
+          assigned_area_id: form.assigned_area_ids[0] || null,
+          event_type: selectedCreateMode === "table" ? undefined : form.event_type || selectedCreateBookingType?.name || undefined,
         }),
       });
       setMessage({
@@ -1599,6 +2289,8 @@ export default function BookingsPage() {
       });
       setMessage({ type: "success", text: `${booking.booking_reference} updated.` });
       const prompt = customerNoticeForStatusChange(booking.status, status, response.item);
+      setEditingBooking((current) => (current?.id === booking.id ? response.item : current));
+      setEditForm((current) => (booking.id === editingBooking?.id ? { ...current, status } : current));
       if (prompt) {
         setNotifyPrompt(prompt);
       }
@@ -1621,33 +2313,147 @@ export default function BookingsPage() {
     }
   };
 
+  const saveTableMark = async (booking: Booking, tableMarked: boolean) => {
+    if (!bookingCanBeTableMarked(booking)) return;
+
+    setTableMarkEdits((current) => ({ ...current, [booking.id]: tableMarked }));
+
+    try {
+      const response = await apiFetch<{ item: Booking }>(`bookings/${booking.id}`, {
+        method: "PUT",
+        ...toJsonBody({ table_marked: tableMarked }),
+      });
+      setMessage({ type: "success", text: tableMarked ? "Reserve Sign placed." : "Reserve Sign cleared." });
+      setEditingBooking((current) => (current?.id === booking.id ? response.item : current));
+      setEditForm((current) => (booking.id === editingBooking?.id ? { ...current, table_marked: tableMarked } : current));
+      await loadBookings();
+      setTableMarkEdits((current) => {
+        const next = { ...current };
+        delete next[booking.id];
+        return next;
+      });
+    } catch (err) {
+      setTableMarkEdits((current) => {
+        const next = { ...current };
+        delete next[booking.id];
+        return next;
+      });
+      setMessage({
+        type: "error",
+        text: err instanceof Error ? err.message : "Reserve Sign could not be updated.",
+      });
+    }
+  };
+
+  const openBulkReserveSignConfirm = (group: BookingGroup) => {
+    const date = filters.date_from && filters.date_to && filters.date_from === filters.date_to
+      ? filters.date_from
+      : "";
+
+    if (!date) {
+      setMessage({ type: "error", text: "Select a single day before updating Reserve Signs by group." });
+      return;
+    }
+
+    const eligibleBookings = group.items.filter(bookingCanBulkUpdateReserveSign);
+    const shouldPlaceReserveSigns = eligibleBookings.some((booking) => !truthy(booking.table_marked));
+    const bookingIds = eligibleBookings
+      .filter((booking) => truthy(booking.table_marked) !== shouldPlaceReserveSigns)
+      .map((booking) => booking.id);
+
+    if (!eligibleBookings.length) {
+      setMessage({ type: "success", text: `${group.title} has no active bookings to update.` });
+      return;
+    }
+
+    if (!bookingIds.length) {
+      setMessage({ type: "success", text: `${group.title} Reserve Signs are already up to date.` });
+      return;
+    }
+
+    const actionLabel = shouldPlaceReserveSigns ? "Place" : "Clear";
+    const resultLabel = shouldPlaceReserveSigns ? "placed" : "cleared";
+    setReserveSignConfirm({
+      groupKey: group.key,
+      groupTitle: group.title,
+      date,
+      bookingIds,
+      tableMarked: shouldPlaceReserveSigns,
+      actionLabel,
+      resultLabel,
+    });
+  };
+
+  const confirmBulkReserveSigns = async () => {
+    if (!reserveSignConfirm) return;
+
+    try {
+      setBulkReserveSignGroupKey(reserveSignConfirm.groupKey);
+      const response = await apiFetch<{ updated: number; date: string; table_marked: number }>("bookings/reserve-signs/bulk", {
+        method: "POST",
+        ...toJsonBody({
+          date: reserveSignConfirm.date,
+          table_marked: reserveSignConfirm.tableMarked,
+          booking_ids: reserveSignConfirm.bookingIds,
+        }),
+      });
+      setMessage({
+        type: "success",
+        text: response.updated === 1
+          ? `Reserve Sign ${reserveSignConfirm.resultLabel} for 1 ${reserveSignConfirm.groupTitle} booking.`
+          : `Reserve Signs ${reserveSignConfirm.resultLabel} for ${response.updated} ${reserveSignConfirm.groupTitle} bookings.`,
+      });
+      setReserveSignConfirm(null);
+      await loadBookings();
+    } catch (err) {
+      setMessage({
+        type: "error",
+        text: err instanceof Error ? err.message : `${reserveSignConfirm.groupTitle} Reserve Signs could not be updated.`,
+      });
+    } finally {
+      setBulkReserveSignGroupKey(null);
+    }
+  };
+
   const saveEditBooking = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!editingBooking) return;
+    if (!editActionsReady || isSavingEdit) return;
     setModalMessage(null);
 
+    const submittedEndTime = editForm.end_time || endTimeFromStart(editForm.time, editDurationMinutes);
+
+    if (!submittedEndTime || minutesFromTime(submittedEndTime) <= minutesFromTime(editForm.time)) {
+      setModalMessage({ type: "error", text: "End time must be after the start time." });
+      return;
+    }
+
     const payload =
-      editingBooking.booking_type === "table"
+      selectedEditMode === "table"
         ? {
             table_ids: editForm.table_ids.map(Number),
           }
-        : editingBooking.booking_type === "function"
+        : selectedEditMode === "function"
           ? {
               assigned_area_ids: editForm.assigned_area_ids.map(Number),
               assigned_area_id: editForm.assigned_area_ids[0] || null,
             }
-          : editingBooking.booking_type === "event"
+          : selectedEditMode === "event"
             ? {
                 table_ids: editForm.table_ids.map(Number),
               }
             : {};
 
-    if (editingBooking.booking_type === "table" && !editForm.table_ids.length) {
+    if (selectedEditMode === "table" && !editForm.table_ids.length) {
       setModalMessage({ type: "error", text: "Select at least one table." });
       return;
     }
+    if (selectedEditMode === "function" && !editForm.assigned_area_ids.length) {
+      setModalMessage({ type: "error", text: "Select at least one function area." });
+      return;
+    }
     if (
-      editingBooking.booking_type === "event" &&
+      selectedEditMode === "event" &&
       !editForm.table_ids.length &&
       !["pending", "waitlist", "cancelled", "declined", "no_show"].includes(editForm.status || editingBooking.status)
     ) {
@@ -1656,6 +2462,7 @@ export default function BookingsPage() {
     }
 
     try {
+      setIsSavingEdit(true);
       const response = await apiFetch<{ item: Booking }>(`bookings/${editingBooking.id}`, {
         method: "PUT",
         ...toJsonBody({
@@ -1664,11 +2471,21 @@ export default function BookingsPage() {
           phone: editForm.phone,
           date: editForm.date,
           time: editForm.time,
+          end_time: submittedEndTime,
           guest_count: Number(editForm.guest_count),
+          booking_type_id: editForm.booking_type_id ? Number(editForm.booking_type_id) : undefined,
+          preferred_area_id: editForm.preferred_area_id ? Number(editForm.preferred_area_id) : null,
           notes: editForm.notes,
           staff_notes: editForm.staff_notes,
+          staff_name: editForm.staff_name,
+          table_marked: editCanMarkTable && editForm.table_marked,
           status: editForm.status,
-          event_type: editForm.event_type || null,
+          event_type:
+            selectedEditMode === "function"
+              ? editForm.event_type || editServiceLabel
+              : selectedEditMode === "event"
+                ? editServiceLabel
+                : null,
           ...payload,
         }),
       });
@@ -1676,8 +2493,9 @@ export default function BookingsPage() {
       setMessage({ type: "success", text: "Booking updated." });
       const nextStatus = editForm.status || editingBooking.status;
       const prompt = customerNoticeForStatusChange(editingBooking.status, nextStatus, response.item);
-      closeEditModal();
-      setEditForm(emptyManualBooking);
+      setEditingBooking(response.item);
+      setEditForm(editFormFromBooking(response.item));
+      setBookingModalMode("view");
       await loadBookings();
       if (prompt) {
         setNotifyPrompt(prompt);
@@ -1687,6 +2505,8 @@ export default function BookingsPage() {
         type: "error",
         text: err instanceof Error ? err.message : "Booking could not be updated.",
       });
+    } finally {
+      setIsSavingEdit(false);
     }
   };
 
@@ -1697,6 +2517,106 @@ export default function BookingsPage() {
   if (!data || !meta || !tablesData) {
     return <LoadingState label="Loading bookings" />;
   }
+
+  const createBookingTypeOptions = [
+    ...(meta.booking_types || [])
+      .filter((type) => Number(type.is_active) === 1)
+      .map((type) => ({ value: String(type.id), label: type.name })),
+  ];
+  const createTypeReservedAreaIds = bookingTypeReservedAreaIds(selectedCreateBookingType);
+  const createTableVisibleAreaIds = selectedCreateMode === "event" && createTypeReservedAreaIds.length
+    ? createTypeReservedAreaIds
+    : undefined;
+  const createFunctionAreaOptions = (meta.function_areas || []).map((area) => ({
+    value: String(area.id),
+    label: area.name,
+  }));
+  const createFunctionAreaDisplay = createFunctionAreaOptions
+    .filter((option) => form.assigned_area_ids.includes(option.value))
+    .map((option) => option.label)
+    .join(", ");
+  const createCanMarkTable = true;
+  const createEndTime = form.end_time || endTimeFromStart(form.time, createDurationMinutes);
+  const editEndTime = editForm.end_time || endTimeFromStart(editForm.time, editDurationMinutes);
+  const selectedTypeReservedAreaIds = bookingTypeReservedAreaIds(selectedEditBookingType);
+  const existingEventReservedAreaIds = editingBooking ? parseTableIds(editingBooking.event_reserved_area_ids) : [];
+  const editTableVisibleAreaIds =
+    selectedEditMode === "event"
+      ? selectedTypeReservedAreaIds.length
+        ? selectedTypeReservedAreaIds
+        : existingEventReservedAreaIds
+      : undefined;
+  const editTableVisibleAreaSet = editTableVisibleAreaIds?.length ? new Set(editTableVisibleAreaIds) : null;
+  const editSelectedTables = tablesData.tables
+    .filter((table) => editForm.table_ids.includes(String(table.id)))
+    .sort((left, right) => Number(left.table_number) - Number(right.table_number));
+  const editSelectedTableNumbers = editSelectedTables.map((table) => table.table_number).join(", ");
+  const editSelectedTableCapacity = editSelectedTables.reduce((total, table) => total + Number(table.capacity), 0);
+  const editSelectedAreaNames = Array.from(
+    new Set(
+      editSelectedTables
+        .map((table) => tablesData.areas.find((area) => Number(area.id) === Number(table.area_id))?.name)
+        .filter(Boolean),
+    ),
+  ).join(", ");
+  const editHasTableChoices = tablesData.tables
+    .filter((table) => !editTableVisibleAreaSet || editTableVisibleAreaSet.has(String(table.area_id)))
+    .length > 0;
+  const bookingHeaderStatus = editingBooking
+    ? bookingModalMode === "edit"
+      ? editForm.status || editingBooking.status
+      : statusEdits[editingBooking.id] || editingBooking.status
+    : "";
+  const EditServiceIcon = editingBooking
+    ? getBookingIcon(
+        (meta.booking_types || []).find((type) => String(type.id) === editForm.booking_type_id)?.icon || editingBooking.booking_type_icon,
+        selectedEditMode === "table" ? Utensils : CalendarCheck,
+      )
+    : CalendarCheck;
+  const editServiceLabel = editingBooking
+    ? selectedEditBookingType?.name || bookingServiceLabel(editingBooking)
+    : "";
+  const editServiceColour = editingBooking
+    ? bookingTypeColourVars(selectedEditBookingType?.colour || editingBooking.booking_type_colour)
+    : undefined;
+  const editBookingTypeOptions =
+    editingBooking
+      ? (meta.booking_types || [])
+          .filter((type) => {
+            const isCurrent = String(type.id) === editForm.booking_type_id;
+            return Number(type.is_active) === 1 || isCurrent;
+          })
+          .map((type) => ({ value: String(type.id), label: type.name }))
+      : [];
+  const editFunctionAreaOptions = (meta.function_areas || []).map((area) => ({
+    value: String(area.id),
+    label: area.name,
+  }));
+  const editPreferredAreaOptions = [
+    { value: "", label: "No preference" },
+    ...tablesData.areas
+      .filter((area) => Number(area.active) === 1)
+      .map((area) => ({ value: String(area.id), label: area.name })),
+  ];
+  const editFunctionAreaDisplay = editFunctionAreaOptions
+    .filter((option) => editForm.assigned_area_ids.includes(option.value))
+    .map((option) => option.label)
+    .join(", ");
+  const editAreaLabel =
+    selectedEditMode === "function"
+      ? editFunctionAreaDisplay || editingBooking?.assigned_area_names || editingBooking?.assigned_area_name || "Unassigned"
+      : editSelectedAreaNames
+        ? editSelectedAreaNames
+      : editingBooking
+        ? bookingAreaLabel(editingBooking)
+        : "";
+  const editCanMarkTable = true;
+  const bulkReserveSignDate = filters.date_from && filters.date_to && filters.date_from === filters.date_to
+    ? filters.date_from
+    : "";
+  const isReserveSignConfirmSaving = reserveSignConfirm
+    ? bulkReserveSignGroupKey === reserveSignConfirm.groupKey
+    : false;
 
   return (
     <>
@@ -1717,6 +2637,86 @@ export default function BookingsPage() {
           openRequest={replyOpenRequest}
           buttonClassName="hidden"
         />
+      ) : null}
+
+      {message ? (
+        <ToastMessage type={message.type} onDismiss={() => setMessage(null)}>
+          {message.text}
+        </ToastMessage>
+      ) : null}
+
+      {reserveSignConfirm ? (
+        <div
+          className="fixed inset-0 z-[1000000] flex items-center justify-center bg-black/45 px-4 py-6"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="reserve-sign-confirm-title"
+        >
+          <div className="w-full max-w-md overflow-hidden rounded-lg border border-gray-200 bg-white shadow-theme-xl dark:border-gray-800 dark:bg-gray-dark">
+            <div className="flex items-start gap-4 border-b border-gray-100 px-5 py-4 dark:border-gray-800">
+              <span
+                className={`flex size-11 shrink-0 items-center justify-center rounded-lg ${
+                  reserveSignConfirm.tableMarked
+                    ? "bg-success-50 text-success-700 dark:bg-success-500/15 dark:text-success-300"
+                    : "bg-warning-50 text-warning-700 dark:bg-warning-500/15 dark:text-orange-300"
+                }`}
+              >
+                <TableProperties className="size-5" />
+              </span>
+              <div className="min-w-0 flex-1">
+                <h2 id="reserve-sign-confirm-title" className="text-lg font-semibold text-gray-950 dark:text-white">
+                  {reserveSignConfirm.actionLabel} Reserve Signs
+                </h2>
+                <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
+                  {reserveSignConfirm.groupTitle} · {formatDisplayDate(reserveSignConfirm.date)}
+                </p>
+              </div>
+              <button
+                type="button"
+                disabled={isReserveSignConfirmSaving}
+                onClick={() => setReserveSignConfirm(null)}
+                className="flex size-9 shrink-0 items-center justify-center rounded-lg border border-gray-300 text-gray-500 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-700 dark:hover:bg-white/5"
+                aria-label="Close Reserve Sign confirmation"
+              >
+                <X className="size-4" />
+              </button>
+            </div>
+
+            <div className="px-5 py-5">
+              <p className="text-sm leading-6 text-gray-700 dark:text-gray-300">
+                {reserveSignConfirm.actionLabel} Reserve Signs for{" "}
+                <span className="font-semibold text-gray-950 dark:text-white">
+                  {pluralize(reserveSignConfirm.bookingIds.length, "booking")}
+                </span>
+                ?
+              </p>
+            </div>
+
+            <div className="flex flex-col-reverse gap-2 border-t border-gray-100 px-5 py-4 dark:border-gray-800 sm:flex-row sm:justify-end">
+              <button
+                type="button"
+                disabled={isReserveSignConfirmSaving}
+                onClick={() => setReserveSignConfirm(null)}
+                className="inline-flex h-10 items-center justify-center rounded-lg border border-gray-300 px-4 text-sm font-semibold text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-white/5"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={isReserveSignConfirmSaving}
+                onClick={confirmBulkReserveSigns}
+                className={`inline-flex h-10 items-center justify-center gap-2 rounded-lg px-4 text-sm font-semibold text-white shadow-theme-xs disabled:cursor-not-allowed disabled:opacity-60 ${
+                  reserveSignConfirm.tableMarked
+                    ? "bg-success-600 hover:bg-success-700"
+                    : "bg-warning-600 hover:bg-warning-700"
+                }`}
+              >
+                <TableProperties className="size-4" />
+                {isReserveSignConfirmSaving ? "Updating..." : reserveSignConfirm.actionLabel}
+              </button>
+            </div>
+          </div>
+        </div>
       ) : null}
 
       <PageHeader
@@ -1767,7 +2767,7 @@ export default function BookingsPage() {
                     <h3 className="mb-3 text-xs font-semibold uppercase text-gray-500">Customer</h3>
                     <div className="grid gap-3 sm:grid-cols-3 lg:grid-cols-2">
                       <div>
-                        <FieldLabel htmlFor="manual-name">Name</FieldLabel>
+                        <FieldLabel htmlFor="manual-name" required>Name</FieldLabel>
                         <input
                           id="manual-name"
                           className={compactInputClass}
@@ -1782,7 +2782,6 @@ export default function BookingsPage() {
                           id="manual-email"
                           type="email"
                           className={compactInputClass}
-                          required
                           value={form.email}
                           onChange={(event) => updateForm("email", event.target.value)}
                         />
@@ -1792,7 +2791,6 @@ export default function BookingsPage() {
                         <input
                           id="manual-phone"
                           className={compactInputClass}
-                          required
                           value={form.phone}
                           onChange={(event) => updateForm("phone", event.target.value)}
                         />
@@ -1802,14 +2800,28 @@ export default function BookingsPage() {
 
                   <section className="rounded-lg border border-gray-200 p-3 dark:border-gray-800">
                     <h3 className="mb-3 text-xs font-semibold uppercase text-gray-500">Booking</h3>
-                    <div className="grid gap-3 sm:grid-cols-3">
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <div className="sm:col-span-2">
+                        <FieldLabel htmlFor="manual-booking-type" required>Booking type</FieldLabel>
+                        <SelectInput
+                          id="manual-booking-type"
+                          value={form.booking_type_id}
+                          onChange={updateCreateBookingType}
+                          buttonClassName="!h-10 !py-2"
+                          menuClassName="min-w-[220px]"
+                          options={
+                            createBookingTypeOptions.length
+                              ? createBookingTypeOptions
+                              : [{ value: "", label: "No booking types available", disabled: true }]
+                          }
+                        />
+                      </div>
                       <div>
-                        <FieldLabel htmlFor="manual-guests">Guests</FieldLabel>
+                        <FieldLabel htmlFor="manual-guests" required>Guests</FieldLabel>
                         <input
                           id="manual-guests"
                           type="number"
-                          min="8"
-                          max="29"
+                          min="1"
                           className={compactInputClass}
                           required
                           value={form.guest_count}
@@ -1817,7 +2829,7 @@ export default function BookingsPage() {
                         />
                       </div>
                       <div>
-                        <FieldLabel htmlFor="manual-date">Date</FieldLabel>
+                        <FieldLabel htmlFor="manual-date" required>Date</FieldLabel>
                         <SingleDatePicker
                           id="manual-date"
                           required
@@ -1826,7 +2838,7 @@ export default function BookingsPage() {
                         />
                       </div>
                       <div>
-                        <FieldLabel htmlFor="manual-time">Time</FieldLabel>
+                        <FieldLabel htmlFor="manual-time" required>Time</FieldLabel>
                         <input
                           id="manual-time"
                           type="time"
@@ -1837,11 +2849,58 @@ export default function BookingsPage() {
                           onChange={(event) => updateForm("time", event.target.value)}
                         />
                       </div>
+                      <div>
+                        <FieldLabel htmlFor="manual-end-time" required>Time end</FieldLabel>
+                        <input
+                          id="manual-end-time"
+                          type="time"
+                          step="1800"
+                          className={compactInputClass}
+                          required
+                          value={createEndTime}
+                          onChange={(event) => {
+                            setIsCreateEndTimeManual(true);
+                            updateForm("end_time", event.target.value);
+                          }}
+                        />
+                      </div>
                     </div>
                   </section>
 
                   <section className="rounded-lg border border-gray-200 p-3 dark:border-gray-800">
                     <div className="grid gap-3 sm:grid-cols-2">
+                      <div className="sm:col-span-2">
+                        <FieldLabel htmlFor="manual-staff-name">Staff name</FieldLabel>
+                        <input
+                          id="manual-staff-name"
+                          className={compactInputClass}
+                          value={form.staff_name}
+                          onChange={(event) => updateForm("staff_name", event.target.value)}
+                        />
+                      </div>
+                      <label
+                        htmlFor="manual-table-marked"
+                        className={`sm:col-span-2 flex items-start gap-3 rounded-lg border px-3 py-3 text-sm ${
+                          createCanMarkTable
+                            ? "border-gray-200 bg-white text-gray-700 dark:border-gray-800 dark:bg-white/[0.02] dark:text-gray-300"
+                            : "border-gray-200 bg-gray-50 text-gray-400 dark:border-gray-800 dark:bg-white/[0.02]"
+                        }`}
+                      >
+                        <input
+                          id="manual-table-marked"
+                          type="checkbox"
+                          className="mt-1 size-4 rounded border-gray-300 text-success-600 focus:ring-success-500/20 disabled:cursor-not-allowed"
+                          checked={createCanMarkTable && form.table_marked}
+                          disabled={!createCanMarkTable}
+                          onChange={(event) => updateForm("table_marked", event.target.checked)}
+                        />
+                        <span>
+                          <span className="block font-semibold text-gray-900 dark:text-white/90">Reserve Sign placed</span>
+                          <span className="mt-0.5 block text-xs text-gray-500 dark:text-gray-400">
+                            Reserve Sign has been placed for this booking.
+                          </span>
+                        </span>
+                      </label>
                       <div>
                         <FieldLabel htmlFor="manual-notes">Notes</FieldLabel>
                         <textarea
@@ -1864,21 +2923,47 @@ export default function BookingsPage() {
                   </section>
                 </div>
 
-                <section className="rounded-lg border border-gray-200 p-3 dark:border-gray-800">
-                  <h3 className="mb-3 text-xs font-semibold uppercase text-gray-500">Tables</h3>
-                  <div id="manual-tables">
-                    <TablePicker
-                      areas={tablesData.areas}
-                      tables={tablesData.tables}
-                      selectedIds={form.table_ids}
-                      onChange={(ids) => updateForm("table_ids", ids)}
-                      unavailableTableIds={createTableAvailability.unavailableTableIds}
-                      blockedAreaIds={createTableAvailability.blockedAreaIds}
-                      isAvailabilityLoading={createAvailability.loading}
-                      availabilityLabel={availabilityStatusLabel(form.date, form.time, createAvailability)}
+                {selectedCreateMode === "function" ? (
+                  <section className="rounded-lg border border-gray-200 p-3 dark:border-gray-800">
+                    <h3 className="mb-3 text-xs font-semibold uppercase text-gray-500">Function areas</h3>
+                    <MultiSelectInput
+                      id="manual-function-areas"
+                      values={form.assigned_area_ids}
+                      onChange={(values) => updateForm("assigned_area_ids", values)}
+                      placeholder="Select areas"
+                      displayValue={createFunctionAreaDisplay || undefined}
+                      buttonClassName="!h-10 !py-2"
+                      menuClassName="min-w-[260px]"
+                      options={
+                        createFunctionAreaOptions.length
+                          ? createFunctionAreaOptions
+                          : [{ value: "", label: "No function areas available", disabled: true }]
+                      }
                     />
-                  </div>
-                </section>
+                  </section>
+                ) : (
+                  <section className="rounded-lg border border-gray-200 p-3 dark:border-gray-800">
+                    <h3 className="mb-3 text-xs font-semibold uppercase text-gray-500">Tables</h3>
+                    <div id="manual-tables">
+                      <TablePicker
+                        areas={tablesData.areas}
+                        tables={tablesData.tables}
+                        selectedIds={form.table_ids}
+                        onChange={(ids) => {
+                          setForm((current) => ({
+                            ...current,
+                            table_ids: ids,
+                          }));
+                        }}
+                        unavailableTableIds={createTableAvailability.unavailableTableIds}
+                        blockedAreaIds={createTableAvailability.blockedAreaIds}
+                        visibleAreaIds={createTableVisibleAreaIds}
+                        isAvailabilityLoading={createAvailability.loading}
+                        availabilityLabel={availabilityStatusLabel(form.date, form.time, createAvailability)}
+                      />
+                    </div>
+                  </section>
+                )}
               </div>
 
               <div className="mt-4 flex flex-col-reverse gap-2 border-t border-gray-100 pt-3 sm:flex-row sm:justify-end dark:border-gray-800">
@@ -1907,103 +2992,223 @@ export default function BookingsPage() {
           className="fixed inset-0 z-999999 flex items-center justify-center overflow-y-auto bg-black/40 px-4 py-4"
           role="dialog"
           aria-modal="true"
-          aria-labelledby="edit-booking-title"
+          aria-labelledby="booking-modal-title"
         >
-          <div className="w-full max-w-6xl rounded-2xl border border-gray-200 bg-white shadow-theme-xl dark:border-gray-800 dark:bg-gray-dark">
-            <div className="flex items-center justify-between gap-4 border-b border-gray-200 px-5 py-3 dark:border-gray-800">
-              <h2 id="edit-booking-title" className="text-base font-semibold text-gray-900 dark:text-white/90">
-                Edit booking
-              </h2>
-              <div className="flex items-center gap-2">
-                <AiReplyComposer booking={editingBooking} onLogged={loadBookings} />
+          <div className="w-full max-w-7xl overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-theme-xl dark:border-gray-800 dark:bg-gray-dark">
+            <div className="flex flex-col gap-4 border-b border-gray-200 px-5 py-4 dark:border-gray-800 lg:flex-row lg:flex-nowrap lg:items-center lg:justify-between lg:gap-6">
+              <div className="flex min-w-0 items-center gap-4 lg:flex-1">
+                <span className="flex size-14 shrink-0 items-center justify-center rounded-full bg-success-50 text-success-600 dark:bg-success-500/15 dark:text-success-400">
+                  <CalendarDays className="size-6" />
+                </span>
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-3">
+                    <h2 id="booking-modal-title" className="text-xl font-semibold text-gray-950 dark:text-white">
+                      {bookingModalMode === "edit" ? "Edit booking" : "Booking details"}
+                    </h2>
+                    <span className="rounded-full bg-gray-100 px-3 py-1 text-xs font-semibold text-gray-600 dark:bg-white/10 dark:text-gray-300">
+                      {editingBooking.booking_reference}
+                    </span>
+                  </div>
+                </div>
+              </div>
+              <div className="flex w-full flex-wrap items-center justify-end gap-2 lg:w-auto lg:shrink-0 lg:flex-nowrap">
+                <SelectInput
+                  value={bookingHeaderStatus}
+                  onChange={(value) => {
+                    if (bookingModalMode === "edit") {
+                      updateEditForm("status", value);
+                      return;
+                    }
+
+                    saveStatus(editingBooking, value);
+                  }}
+                  ariaLabel={`${editingBooking.booking_reference} status`}
+                  className="w-full sm:w-[170px] lg:w-[170px] lg:shrink-0"
+                  buttonClassName={`!h-10 !rounded-lg !py-2 !pl-4 !pr-3 text-sm font-semibold capitalize ${
+                    statusControlStyles[bookingHeaderStatus] || "border-gray-200 bg-gray-50 text-gray-700"
+                  }`}
+                  menuClassName="min-w-[170px]"
+                  options={(bookingModalMode === "edit"
+                    ? statusOptionsForMode(selectedEditMode, bookingHeaderStatus)
+                    : statusOptionsFor(editingBooking)
+                  ).map((status) => ({
+                    value: status,
+                    label: statusDisplayLabel(status),
+                  }))}
+                />
+                {bookingModalMode === "view" ? (
+                  <>
+                    <button
+                      type="button"
+                      onClick={startEditBooking}
+                      className="inline-flex h-10 min-w-[150px] items-center justify-center gap-2 whitespace-nowrap rounded-lg border border-success-200 bg-success-50 px-4 text-sm font-semibold text-success-700 shadow-theme-xs hover:bg-success-100 dark:border-success-500/20 dark:bg-success-500/15 dark:text-success-300"
+                    >
+                      <Pencil className="size-4" />
+                      Edit booking
+                    </button>
+                    <AiReplyComposer
+                      booking={editingBooking}
+                      onLogged={loadBookings}
+                      buttonLabel="Send / Reply"
+                      buttonClassName="inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-gray-300 bg-white px-4 text-sm font-semibold text-gray-700 shadow-theme-xs hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-300 dark:hover:bg-white/5"
+                    />
+                  </>
+                ) : (
+                  <>
+                    <button
+                      type="submit"
+                      form={`booking-edit-form-${editingBooking.id}`}
+                      disabled={!editActionsReady || isSavingEdit}
+                      className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-success-600 px-4 text-sm font-semibold text-white shadow-theme-xs hover:bg-success-700 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      <Save className="size-4" />
+                      {isSavingEdit ? "Saving" : "Save changes"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={cancelEditBooking}
+                      className="inline-flex h-10 items-center justify-center rounded-lg border border-gray-300 bg-white px-4 text-sm font-semibold text-gray-700 shadow-theme-xs hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-300 dark:hover:bg-white/5"
+                    >
+                      Cancel
+                    </button>
+                  </>
+                )}
                 <button
                   type="button"
                   onClick={closeEditModal}
-                  className="flex size-8 items-center justify-center rounded-lg border border-gray-300 text-gray-500 hover:bg-gray-50 dark:border-gray-700 dark:hover:bg-white/5"
-                  aria-label="Close edit booking modal"
+                  className="flex size-10 items-center justify-center rounded-lg border border-gray-300 text-gray-500 shadow-theme-xs hover:bg-gray-50 dark:border-gray-700 dark:hover:bg-white/5"
+                  aria-label="Close booking modal"
                 >
                   <X className="size-4" />
                 </button>
               </div>
             </div>
 
-            <form onSubmit={saveEditBooking} className="max-h-[calc(100vh-8rem)] overflow-y-auto p-4">
+            {bookingModalMode === "view" ? (
+              <BookingDetailsPanel booking={editingBooking} />
+            ) : (
+            <form
+              id={`booking-edit-form-${editingBooking.id}`}
+              onSubmit={saveEditBooking}
+              className="max-h-[calc(100vh-8rem)] overflow-y-auto bg-gray-50/40 p-5 dark:bg-white/[0.01]"
+            >
               {modalMessage ? (
                 <div className="mb-4">
                   <FormMessage type={modalMessage.type}>{modalMessage.text}</FormMessage>
                 </div>
               ) : null}
 
-              <div className="grid gap-4 lg:grid-cols-[1fr_1.05fr]">
-                <div className="space-y-3">
-                  <section className="rounded-lg border border-gray-200 p-3 dark:border-gray-800">
-                    <h3 className="mb-3 text-xs font-semibold uppercase text-gray-500">Customer</h3>
-                    <div className="grid gap-3 sm:grid-cols-3 lg:grid-cols-2">
-                      <div>
-                        <FieldLabel htmlFor="edit-name">Name</FieldLabel>
-                        <input
-                          id="edit-name"
-                          className={compactInputClass}
-                          required
-                          value={editForm.name}
-                          onChange={(event) => updateEditForm("name", event.target.value)}
-                        />
+              <div className="grid min-w-0 items-start gap-5 xl:grid-cols-[minmax(0,1fr)_380px]">
+                <div className="grid min-w-0 gap-5">
+                  <section className="rounded-lg border border-gray-200 bg-white p-5 shadow-theme-xs dark:border-gray-800 dark:bg-white/[0.03]">
+                    <div className="grid min-w-0 gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(120px,140px)_minmax(180px,220px)] lg:items-end">
+                      <div className="flex min-w-0 items-center gap-4 lg:items-center">
+                        <span
+                          className="flex size-16 shrink-0 items-center justify-center rounded-lg bg-[color-mix(in_srgb,var(--booking-type-colour)_12%,white)] text-[var(--booking-type-colour)]"
+                          style={editServiceColour}
+                        >
+                          <EditServiceIcon className="size-7" />
+                        </span>
+                        <div className="min-w-0">
+                          <h3 className="truncate text-2xl font-semibold text-gray-950 dark:text-white">
+                            {editForm.name || editingBooking.customer_name}
+                          </h3>
+                          <p className="mt-1 text-sm font-semibold text-gray-500 dark:text-gray-400">
+                            {editServiceLabel}
+                          </p>
+                        </div>
                       </div>
-                      <div>
-                        <FieldLabel htmlFor="edit-email">Email</FieldLabel>
-                        <input
-                          id="edit-email"
-                          type="email"
-                          className={compactInputClass}
-                          required
-                          value={editForm.email}
-                          onChange={(event) => updateEditForm("email", event.target.value)}
-                        />
+
+                      <div className="min-w-0">
+                        <FieldLabel htmlFor="edit-guests" required>Party size</FieldLabel>
+                        <div className="relative">
+                          <Users className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-gray-400" />
+                          <input
+                            id="edit-guests"
+                            type="number"
+                            min="1"
+                            className={`${compactInputClass} pl-10`}
+                            required
+                            value={editForm.guest_count}
+                            onChange={(event) => updateEditForm("guest_count", event.target.value)}
+                          />
+                        </div>
                       </div>
-                      <div>
-                        <FieldLabel htmlFor="edit-phone">Phone</FieldLabel>
-                        <input
-                          id="edit-phone"
-                          className={compactInputClass}
-                          required
-                          value={editForm.phone}
-                          onChange={(event) => updateEditForm("phone", event.target.value)}
+
+                      {selectedEditMode === "table" || selectedEditMode === "event" ? (
+                        <div className="min-w-0">
+                          <FieldLabel htmlFor="edit-assigned-table" required>Assigned tables</FieldLabel>
+                          <button
+                            id="edit-assigned-table"
+                            type="button"
+                            disabled={!editHasTableChoices}
+                            onClick={() => setIsEditTablePickerOpen(true)}
+                            aria-haspopup="dialog"
+                            className="flex h-10 w-full min-w-0 items-center justify-between gap-3 rounded-lg border border-gray-300 bg-white px-3 py-2 text-left text-sm font-semibold text-gray-800 shadow-theme-xs transition hover:bg-gray-50 disabled:cursor-not-allowed disabled:bg-gray-50 disabled:text-gray-400 dark:border-gray-700 dark:bg-gray-900 dark:text-white/90 dark:hover:bg-white/5 dark:disabled:bg-white/[0.03]"
+                          >
+                            <span className="flex min-w-0 items-center gap-2">
+                              <Table2 className="size-4 shrink-0 text-gray-400" />
+                              <span className="min-w-0 truncate">
+                                {editSelectedTables.length
+                                  ? `Table ${editSelectedTableNumbers}`
+                                  : editHasTableChoices
+                                    ? "Select tables"
+                                    : "No tables available"}
+                              </span>
+                            </span>
+                            {editSelectedTables.length ? (
+                              <span className="shrink-0 text-xs font-semibold text-gray-500 dark:text-gray-400">
+                                {editSelectedTableCapacity} seats
+                              </span>
+                            ) : null}
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="min-w-0">
+                          <FieldLabel htmlFor="edit-assigned-areas" required>Assigned areas</FieldLabel>
+                          <MultiSelectInput
+                            id="edit-assigned-areas"
+                            values={editForm.assigned_area_ids}
+                            onChange={(values) => updateEditForm("assigned_area_ids", values)}
+                            placeholder="Select areas"
+                            displayValue={editFunctionAreaDisplay || undefined}
+                            buttonClassName="!h-10 !py-2"
+                            menuClassName="min-w-[220px]"
+                            options={
+                              editFunctionAreaOptions.length
+                                ? editFunctionAreaOptions
+                                : [{ value: "", label: "No function areas available", disabled: true }]
+                            }
+                          />
+                        </div>
+                      )}
+
+                      <ReadOnlyEditControl label="Area / Section" icon={MapPin}>
+                        {editAreaLabel || "-"}
+                      </ReadOnlyEditControl>
+
+                      <div className="min-w-0">
+                        <FieldLabel htmlFor="edit-booking-type" required>Booking type</FieldLabel>
+                        <SelectInput
+                          id="edit-booking-type"
+                          value={editForm.booking_type_id}
+                          onChange={updateEditBookingType}
+                          buttonClassName="!h-10 !py-2"
+                          menuClassName="min-w-[220px]"
+                          options={
+                            editBookingTypeOptions.length
+                              ? editBookingTypeOptions
+                              : [{ value: editForm.booking_type_id, label: editServiceLabel || "No booking types available", disabled: true }]
+                          }
                         />
                       </div>
                     </div>
                   </section>
 
-                  <section className="rounded-lg border border-gray-200 p-3 dark:border-gray-800">
-                    <h3 className="mb-3 text-xs font-semibold uppercase text-gray-500">Booking</h3>
-                    <div className="grid gap-3 sm:grid-cols-4">
+                  <DetailSection title="Reservation" icon={Calendar} iconClassName="bg-success-50 text-success-600 dark:bg-success-500/15 dark:text-success-400">
+                    <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
                       <div>
-                        <FieldLabel htmlFor="edit-guests">Guests</FieldLabel>
-                        <input
-                          id="edit-guests"
-                          type="number"
-                          min={editingBooking.booking_type === "table" ? "8" : "1"}
-                          max={editingBooking.booking_type === "table" ? "29" : undefined}
-                          className={compactInputClass}
-                          required
-                          value={editForm.guest_count}
-                          onChange={(event) => updateEditForm("guest_count", event.target.value)}
-                        />
-                      </div>
-                      <div>
-                        <FieldLabel htmlFor="edit-status">Status</FieldLabel>
-                        <SelectInput
-                          id="edit-status"
-                          value={editForm.status || editingBooking.status}
-                          onChange={(value) => updateEditForm("status", value)}
-                          buttonClassName="!h-10 !py-2"
-                          options={statusOptionsFor(editingBooking).map((status) => ({
-                            value: status,
-                            label: status.replace("_", " "),
-                          }))}
-                        />
-                      </div>
-                      <div>
-                        <FieldLabel htmlFor="edit-date">Date</FieldLabel>
+                        <FieldLabel htmlFor="edit-date" required>Date</FieldLabel>
                         <SingleDatePicker
                           id="edit-date"
                           required
@@ -2012,38 +3217,51 @@ export default function BookingsPage() {
                         />
                       </div>
                       <div>
-                        <FieldLabel htmlFor="edit-time">Time</FieldLabel>
-                        <input
-                          id="edit-time"
-                          type="time"
-                          step="1800"
-                          className={compactInputClass}
-                          required
-                          value={editForm.time}
-                          onChange={(event) => updateEditForm("time", event.target.value)}
+                        <FieldLabel htmlFor="edit-time" required>Time start</FieldLabel>
+                        <div className="relative">
+                          <Clock className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-gray-400" />
+                          <input
+                            id="edit-time"
+                            type="time"
+                            step="1800"
+                            className={`${compactInputClass} pl-10`}
+                            required
+                            value={editForm.time}
+                            onChange={(event) => updateEditForm("time", event.target.value)}
+                          />
+                        </div>
+                      </div>
+                      <div>
+                        <FieldLabel htmlFor="edit-end-time" required>Time end</FieldLabel>
+                        <div className="relative">
+                          <Clock className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-gray-400" />
+                          <input
+                            id="edit-end-time"
+                            type="time"
+                            step="1800"
+                            className={`${compactInputClass} pl-10`}
+                            required
+                            value={editEndTime}
+                            onChange={(event) => {
+                              setIsEditEndTimeManual(true);
+                              updateEditForm("end_time", event.target.value);
+                            }}
+                          />
+                        </div>
+                      </div>
+                      <div>
+                        <FieldLabel htmlFor="edit-preferred-area">Preferred area</FieldLabel>
+                        <SelectInput
+                          id="edit-preferred-area"
+                          value={editForm.preferred_area_id}
+                          onChange={(value) => updateEditForm("preferred_area_id", value)}
+                          buttonClassName="!h-10 !py-2"
+                          menuClassName="min-w-[220px]"
+                          options={editPreferredAreaOptions}
                         />
                       </div>
-                    </div>
-                  </section>
-
-                  {editingBooking.booking_type === "function" ? (
-                    <section className="rounded-lg border border-gray-200 p-3 dark:border-gray-800">
-                      <h3 className="mb-3 text-xs font-semibold uppercase text-gray-500">Function</h3>
-                      <div className="grid gap-3">
-                        <div>
-                          <FieldLabel htmlFor="edit-area">Areas</FieldLabel>
-                          <div id="edit-area">
-                            <FunctionAreaPicker
-                              areas={meta.function_areas}
-                              selectedIds={editForm.assigned_area_ids}
-                              onChange={(ids) => {
-                                updateEditForm("assigned_area_ids", ids);
-                                updateEditForm("assigned_area_id", ids[0] || "");
-                              }}
-                            />
-                          </div>
-                        </div>
-                        <div>
+                      {selectedEditMode === "function" ? (
+                        <div className="sm:col-span-2">
                           <FieldLabel htmlFor="edit-event-type">Event type</FieldLabel>
                           <input
                             id="edit-event-type"
@@ -2052,121 +3270,202 @@ export default function BookingsPage() {
                             onChange={(event) => updateEditForm("event_type", event.target.value)}
                           />
                         </div>
-                      </div>
-                    </section>
-                  ) : null}
+                      ) : null}
+                    </div>
+                  </DetailSection>
 
-                  {editingBooking.booking_type === "event" ? (
-                    <section className="rounded-lg border border-gray-200 p-3 dark:border-gray-800">
-                      <h3 className="mb-3 text-xs font-semibold uppercase text-gray-500">Event</h3>
-                      <dl className="grid gap-3 text-sm sm:grid-cols-3 lg:grid-cols-1">
+                  {selectedEditMode === "event" ? (
+                    <DetailSection title="Event" icon={CalendarCheck} iconClassName="bg-blue-light-50 text-blue-light-600 dark:bg-blue-light-500/15 dark:text-blue-light-300">
+                      <dl className="grid gap-4 text-sm sm:grid-cols-3">
                         <div>
-                          <dt className="text-gray-500">Booking type</dt>
-                          <dd className="font-medium text-gray-900">
-                            {editingBooking.booking_type_name || editingBooking.event_type || "-"}
-                          </dd>
-                        </div>
-                        <div>
-                          <dt className="text-gray-500">Reserved area</dt>
-                          <dd className="font-medium text-gray-900">
+                          <dt className="text-gray-500 dark:text-gray-400">Reserved area</dt>
+                          <dd className="mt-1 font-semibold text-gray-900 dark:text-white/90">
                             {editingBooking.event_reserved_area_names || "No reserved area"}
                           </dd>
                         </div>
-                        <div>
-                          <dt className="text-gray-500">Custom answers</dt>
-                          <dd className="whitespace-pre-line font-medium text-gray-900">
+                        <div className="sm:col-span-2">
+                          <dt className="text-gray-500 dark:text-gray-400">Custom answers</dt>
+                          <dd className="mt-1 whitespace-pre-line font-semibold text-gray-900 dark:text-white/90">
                             {editingBooking.custom_answers_summary || "-"}
                           </dd>
                         </div>
                       </dl>
-                    </section>
+                    </DetailSection>
                   ) : null}
 
-                  <section className="rounded-lg border border-gray-200 p-3 dark:border-gray-800">
-                    <div className="grid gap-3 sm:grid-cols-2">
+                  <DetailSection title="Notes" icon={FileText} iconClassName="bg-warning-50 text-warning-600 dark:bg-warning-500/15 dark:text-orange-300">
+                    <div className="grid gap-4 lg:grid-cols-2">
                       <div>
-                        <FieldLabel htmlFor="edit-notes">Notes</FieldLabel>
+                        <FieldLabel htmlFor="edit-notes">Guest notes</FieldLabel>
                         <textarea
                           id="edit-notes"
-                          className={compactTextareaClass}
+                          className={`${compactTextareaClass} min-h-[120px]`}
                           value={editForm.notes}
                           onChange={(event) => updateEditForm("notes", event.target.value)}
                         />
                       </div>
                       <div>
-                        <FieldLabel htmlFor="edit-staff-notes">Staff Notes</FieldLabel>
+                        <FieldLabel htmlFor="edit-staff-notes">Staff notes</FieldLabel>
                         <textarea
                           id="edit-staff-notes"
-                          className={compactTextareaClass}
+                          className={`${compactTextareaClass} min-h-[120px]`}
                           value={editForm.staff_notes}
                           onChange={(event) => updateEditForm("staff_notes", event.target.value)}
                         />
                       </div>
                     </div>
-                  </section>
+                  </DetailSection>
                 </div>
 
-                {editingBooking.booking_type === "table" || editingBooking.booking_type === "event" ? (
-                  <section className="rounded-lg border border-gray-200 p-3 dark:border-gray-800">
-                    <h3 className="mb-3 text-xs font-semibold uppercase text-gray-500">Tables</h3>
-                    <div id="edit-tables">
-                      <TablePicker
-                        areas={tablesData.areas}
-                        tables={tablesData.tables}
-                        selectedIds={editForm.table_ids}
-                        onChange={(ids) => updateEditForm("table_ids", ids)}
-                        unavailableTableIds={editTableAvailability.unavailableTableIds}
-                        blockedAreaIds={editTableAvailability.blockedAreaIds}
-                        visibleAreaIds={
-                          editingBooking.booking_type === "event"
-                            ? parseTableIds(editingBooking.event_reserved_area_ids)
-                            : undefined
-                        }
-                        isAvailabilityLoading={editAvailability.loading}
-                        availabilityLabel={availabilityStatusLabel(editForm.date, editForm.time, editAvailability)}
+                <div className="grid min-w-0 gap-5">
+                  <DetailSection title="Guest & Contact" icon={UserRound} iconClassName="bg-purple-50 text-purple-700 dark:bg-purple-500/15 dark:text-purple-300">
+                    <div className="grid gap-4">
+                      <div>
+                        <FieldLabel htmlFor="edit-name" required>Name</FieldLabel>
+                        <div className="relative">
+                          <UserRound className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-gray-400" />
+                          <input
+                            id="edit-name"
+                            className={`${compactInputClass} pl-10`}
+                            required
+                            value={editForm.name}
+                            onChange={(event) => updateEditForm("name", event.target.value)}
+                          />
+                        </div>
+                      </div>
+                      <div>
+                        <FieldLabel htmlFor="edit-phone">Phone</FieldLabel>
+                        <div className="relative">
+                          <Phone className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-gray-400" />
+                          <input
+                            id="edit-phone"
+                            className={`${compactInputClass} pl-10`}
+                            value={editForm.phone}
+                            onChange={(event) => updateEditForm("phone", event.target.value)}
+                          />
+                        </div>
+                      </div>
+                      <div>
+                        <FieldLabel htmlFor="edit-email">Email</FieldLabel>
+                        <div className="relative">
+                          <Mail className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-gray-400" />
+                          <input
+                            id="edit-email"
+                            type="email"
+                            className={`${compactInputClass} pl-10`}
+                            value={editForm.email}
+                            onChange={(event) => updateEditForm("email", event.target.value)}
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  </DetailSection>
+
+                  <DetailSection title="Staff name" icon={UserRound} iconClassName="bg-blue-light-50 text-blue-light-600 dark:bg-blue-light-500/15 dark:text-blue-light-300">
+                    <FieldLabel htmlFor="edit-staff-name">Staff name</FieldLabel>
+                    <div className="relative">
+                      <UserRound className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-gray-400" />
+                      <input
+                        id="edit-staff-name"
+                        className={`${compactInputClass} pl-10`}
+                        value={editForm.staff_name}
+                        onChange={(event) => updateEditForm("staff_name", event.target.value)}
                       />
                     </div>
-                  </section>
-                ) : (
-                  <section className="rounded-lg border border-gray-200 bg-gray-50 p-3 dark:border-gray-800 dark:bg-white/[0.03]">
-                    <h3 className="mb-3 text-xs font-semibold uppercase text-gray-500">Request</h3>
-                    <dl className="grid gap-3 text-sm sm:grid-cols-3 lg:grid-cols-1">
-                      <div>
-                        <dt className="text-gray-500">Reference</dt>
-                        <dd className="font-medium text-gray-900">{editingBooking.booking_reference}</dd>
-                      </div>
-                      <div>
-                        <dt className="text-gray-500">Preferred area</dt>
-                        <dd className="font-medium text-gray-900">{editingBooking.preferred_area_name || "-"}</dd>
-                      </div>
-                      <div>
-                        <dt className="text-gray-500">Current area</dt>
-                        <dd className="font-medium text-gray-900">
-                          {editingBooking.assigned_area_names || editingBooking.assigned_area_name || "Unassigned"}
-                        </dd>
-                      </div>
-                    </dl>
-                  </section>
-                )}
-              </div>
+                  </DetailSection>
 
-              <div className="mt-4 flex flex-col-reverse gap-2 border-t border-gray-100 pt-3 sm:flex-row sm:justify-end dark:border-gray-800">
-                <button
-                  type="button"
-                  onClick={closeEditModal}
-                  className="inline-flex h-10 items-center justify-center rounded-lg border border-gray-300 px-4 text-sm font-medium text-gray-700 hover:bg-gray-50 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-white/5"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-brand-500 px-4 text-sm font-medium text-white hover:bg-brand-600"
-                >
-                  <Save className="size-4" />
-                  Save changes
-                </button>
+                  <DetailSection title="Floor prep" icon={Table2} iconClassName="bg-success-50 text-success-600 dark:bg-success-500/15 dark:text-success-400">
+                    <label
+                      htmlFor="edit-table-marked"
+                      className={`flex items-start gap-3 rounded-lg border px-3 py-3 text-sm ${
+                        editCanMarkTable
+                          ? "border-gray-200 bg-white text-gray-700 dark:border-gray-800 dark:bg-white/[0.02] dark:text-gray-300"
+                          : "border-gray-200 bg-gray-50 text-gray-400 dark:border-gray-800 dark:bg-white/[0.02]"
+                      }`}
+                    >
+                      <input
+                        id="edit-table-marked"
+                        type="checkbox"
+                        className="mt-1 size-4 rounded border-gray-300 text-success-600 focus:ring-success-500/20 disabled:cursor-not-allowed"
+                        checked={editCanMarkTable && editForm.table_marked}
+                        disabled={!editCanMarkTable}
+                        onChange={(event) => updateEditForm("table_marked", event.target.checked)}
+                      />
+                      <span>
+                        <span className="block font-semibold text-gray-900 dark:text-white/90">Reserve Sign placed</span>
+                        <span className="mt-0.5 block text-xs text-gray-500 dark:text-gray-400">
+                          Reserve Sign has been placed for this booking.
+                        </span>
+                      </span>
+                    </label>
+                  </DetailSection>
+                </div>
               </div>
             </form>
+            )}
+          </div>
+        </div>
+      ) : null}
+
+      {editingBooking && bookingModalMode === "edit" && isEditTablePickerOpen ? (
+        <div
+          className="fixed inset-0 z-[1000010] flex items-center justify-center overflow-y-auto bg-black/50 px-4 py-6"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="edit-table-picker-title"
+        >
+          <div className="w-full max-w-5xl overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-theme-xl dark:border-gray-800 dark:bg-gray-dark">
+            <div className="flex flex-col gap-3 border-b border-gray-200 px-5 py-4 dark:border-gray-800 sm:flex-row sm:items-center sm:justify-between">
+              <div className="flex min-w-0 items-center gap-3">
+                <span className="flex size-11 shrink-0 items-center justify-center rounded-lg bg-success-50 text-success-600 dark:bg-success-500/15 dark:text-success-400">
+                  <Table2 className="size-5" />
+                </span>
+                <div className="min-w-0">
+                  <h3 id="edit-table-picker-title" className="text-base font-semibold text-gray-950 dark:text-white">
+                    Select tables
+                  </h3>
+                  <p className="mt-1 truncate text-sm text-gray-500 dark:text-gray-400">
+                    {editForm.date ? formatDisplayDate(editForm.date) : "Select a date"} - {editForm.time ? formatDisplayTime(editForm.time) : "Select a time"}
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setIsEditTablePickerOpen(false)}
+                  className="inline-flex h-10 items-center justify-center rounded-lg bg-success-600 px-4 text-sm font-semibold text-white shadow-theme-xs hover:bg-success-700"
+                >
+                  Done
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setIsEditTablePickerOpen(false)}
+                  className="flex size-10 items-center justify-center rounded-lg border border-gray-300 text-gray-500 shadow-theme-xs hover:bg-gray-50 dark:border-gray-700 dark:hover:bg-white/5"
+                  aria-label="Close table selector"
+                >
+                  <X className="size-4" />
+                </button>
+              </div>
+            </div>
+
+            <div className="max-h-[calc(100vh-9rem)] overflow-y-auto p-5">
+              <TablePicker
+                areas={tablesData.areas}
+                tables={tablesData.tables}
+                selectedIds={editForm.table_ids}
+                onChange={(ids) => {
+                  setEditForm((current) => ({
+                    ...current,
+                    table_ids: ids,
+                  }));
+                }}
+                unavailableTableIds={editTableAvailability.unavailableTableIds}
+                blockedAreaIds={editTableAvailability.blockedAreaIds}
+                visibleAreaIds={editTableVisibleAreaIds}
+                isAvailabilityLoading={editAvailability.loading}
+                availabilityLabel={availabilityStatusLabel(editForm.date, editForm.time, editAvailability)}
+              />
+            </div>
           </div>
         </div>
       ) : null}
@@ -2212,11 +3511,6 @@ export default function BookingsPage() {
               </div>
             </div>
 
-            {message ? (
-              <div className="px-6 py-4">
-                <FormMessage type={message.type}>{message.text}</FormMessage>
-              </div>
-            ) : null}
           </section>
 
           {groupedBookings.length === 0 ? (
@@ -2231,73 +3525,120 @@ export default function BookingsPage() {
             const Icon = getBookingIcon(group.icon, styles.Icon);
             const guestTotal = totalGuests(group.items);
             const colourStyle = bookingTypeColourVars(group.colour);
+            const groupReserveSignEligibleCount = group.items.filter(bookingCanBulkUpdateReserveSign).length;
+            const groupReserveSignUnplacedCount = group.items.filter(bookingNeedsBulkReserveSign).length;
+            const shouldPlaceGroupReserveSigns = groupReserveSignUnplacedCount > 0;
+            const isGroupReserveSignSaving = bulkReserveSignGroupKey === group.key;
+            const canToggleGroupReserveSigns = Boolean(bulkReserveSignDate) && groupReserveSignEligibleCount > 0 && bulkReserveSignGroupKey === null;
 
             return (
               <section
                 key={group.key}
-                className={`overflow-hidden rounded-2xl border border-t-4 border-gray-200 bg-white dark:border-gray-800 dark:bg-white/[0.03] ${styles.accent}`}
-                style={{ ...colourStyle, borderTopColor: "var(--booking-type-colour)" }}
+                className="relative overflow-hidden rounded-lg border border-gray-200 bg-white shadow-theme-sm dark:border-gray-800 dark:bg-white/[0.03]"
+                style={colourStyle}
               >
-                <button
-                  type="button"
-                  className="flex w-full items-center gap-4 px-6 py-5 text-left transition hover:bg-gray-50 dark:hover:bg-white/[0.03]"
-                  onClick={() => toggleGroup(group.key)}
-                  aria-expanded={isExpanded}
-                >
-                  <span
-                    className={`flex size-12 flex-none items-center justify-center rounded-xl ${styles.iconWrap}`}
-                    style={{ backgroundColor: "color-mix(in srgb, var(--booking-type-colour) 12%, white)" }}
+                <span
+                  aria-hidden="true"
+                  className="absolute inset-y-0 left-0 w-1 bg-[var(--booking-type-colour)]"
+                />
+                <div className="flex w-full items-center gap-3 px-6 py-6 pl-7 transition hover:bg-gray-50/70 dark:hover:bg-white/[0.03] sm:px-7 sm:pl-8">
+                  <button
+                    type="button"
+                    className="flex min-w-0 flex-1 items-center gap-4 text-left focus:outline-none"
+                    onClick={() => toggleGroup(group.key)}
+                    aria-expanded={isExpanded}
                   >
-                    <Icon className={`size-5 ${styles.icon}`} style={{ color: "var(--booking-type-colour)" }} />
-                  </span>
-                  <div className="min-w-0 flex-1">
-                    <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-                      <h2 className="text-lg font-semibold text-gray-800 dark:text-white/90">{group.title}</h2>
-                      <span className="text-sm font-medium text-gray-500 dark:text-gray-400">{group.timeRange || styles.timeRange}</span>
-                      <span className="inline-flex items-center justify-center rounded-full bg-gray-100 px-2.5 py-0.5 text-theme-xs font-medium text-gray-700 dark:bg-white/5 dark:text-white/80">
-                        {pluralize(group.items.length, "booking")}
-                      </span>
-                      <span className="inline-flex items-center justify-center rounded-full bg-gray-100 px-2.5 py-0.5 text-theme-xs font-medium text-gray-700 dark:bg-white/5 dark:text-white/80">
-                        {pluralize(guestTotal, "guest")}
-                      </span>
+                    <span
+                      className={`flex size-14 flex-none items-center justify-center rounded-lg ${styles.iconWrap}`}
+                      style={{ backgroundColor: "color-mix(in srgb, var(--booking-type-colour) 12%, white)" }}
+                    >
+                      <Icon className={`size-6 ${styles.icon}`} style={{ color: "var(--booking-type-colour)" }} />
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+                        <h2 className="text-lg font-semibold text-gray-900 dark:text-white/90">{group.title}</h2>
+                        <span className="text-sm font-semibold text-gray-500 dark:text-gray-400">{group.timeRange || styles.timeRange}</span>
+                        <span
+                          className="inline-flex items-center justify-center rounded-full px-3 py-1 text-theme-xs font-semibold"
+                          style={{
+                            backgroundColor: "color-mix(in srgb, var(--booking-type-colour) 12%, white)",
+                            color: "var(--booking-type-colour)",
+                          }}
+                        >
+                          {pluralize(group.items.length, "booking")}
+                        </span>
+                        <span className="inline-flex items-center justify-center rounded-full bg-gray-100 px-3 py-1 text-theme-xs font-semibold text-gray-700 dark:bg-white/5 dark:text-white/80">
+                          {pluralize(guestTotal, "guest")}
+                        </span>
+                      </div>
                     </div>
-                  </div>
-                  <ChevronDown
-                    className={`size-5 flex-none text-gray-500 transition-transform dark:text-gray-400 ${isExpanded ? "rotate-180" : ""}`}
-                  />
-                </button>
+                  </button>
+                  <button
+                    type="button"
+                    disabled={!canToggleGroupReserveSigns}
+                    title={
+                      !bulkReserveSignDate
+                        ? "Select one day to update Reserve Signs for this group"
+                        : groupReserveSignEligibleCount === 0
+                          ? `${group.title} has no active bookings to update`
+                          : shouldPlaceGroupReserveSigns
+                            ? `Place Reserve Signs for ${groupReserveSignUnplacedCount} ${group.title} booking${groupReserveSignUnplacedCount === 1 ? "" : "s"}`
+                            : `Clear Reserve Signs for ${groupReserveSignEligibleCount} ${group.title} booking${groupReserveSignEligibleCount === 1 ? "" : "s"}`
+                    }
+                    aria-label={`${shouldPlaceGroupReserveSigns ? "Place" : "Clear"} Reserve Signs for ${group.title}`}
+                    onClick={() => openBulkReserveSignConfirm(group)}
+                    className={`inline-flex size-10 flex-none items-center justify-center rounded-lg border transition ${
+                      !shouldPlaceGroupReserveSigns && bulkReserveSignDate && groupReserveSignEligibleCount > 0
+                        ? "border-success-200 bg-success-50 text-success-700 dark:border-success-500/30 dark:bg-success-500/15 dark:text-success-300"
+                        : "border-warning-200 bg-warning-50 text-warning-700 hover:bg-warning-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-warning-500/30 dark:bg-warning-500/15 dark:text-orange-300"
+                    } ${isGroupReserveSignSaving ? "opacity-60" : ""}`}
+                  >
+                    <TableProperties className="size-4" />
+                  </button>
+                  <button
+                    type="button"
+                    className="inline-flex size-10 flex-none items-center justify-center rounded-lg text-gray-500 transition hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-white/[0.05]"
+                    onClick={() => toggleGroup(group.key)}
+                    aria-label={`${isExpanded ? "Collapse" : "Expand"} ${group.title}`}
+                    aria-expanded={isExpanded}
+                  >
+                    <ChevronDown
+                      className={`size-5 transition-transform ${isExpanded ? "rotate-180" : ""}`}
+                    />
+                  </button>
+                </div>
 
                 {isExpanded ? (
-                  <div className="border-t border-gray-100 bg-white dark:border-gray-800 dark:bg-transparent">
+                  <div className="border-t border-gray-200 bg-white dark:border-gray-800 dark:bg-transparent">
                     {group.items.length ? (
                       <div className="max-w-full overflow-x-auto">
                       <Table className="min-w-[1360px] table-fixed">
                         <BookingTableColumns />
-                        <TableHeader className="border-b border-gray-100 bg-gray-50 dark:border-white/[0.05] dark:bg-white/[0.02]">
+                        <TableHeader className="border-b border-gray-200 bg-gray-50/80 dark:border-white/[0.05] dark:bg-white/[0.02]">
                           <TableRow>
-                            <TableCell isHeader className="px-5 py-3 font-medium text-gray-500 text-start text-theme-xs dark:text-gray-400">
+                            <TableCell isHeader className="px-5 py-4 font-semibold text-gray-500 text-start text-theme-xs dark:text-gray-400">
                               Time
                             </TableCell>
-                            <TableCell isHeader className="px-5 py-3 font-medium text-gray-500 text-start text-theme-xs dark:text-gray-400">
+                            <TableCell isHeader className="px-5 py-4 font-semibold text-gray-500 text-start text-theme-xs dark:text-gray-400">
                               Guest
                             </TableCell>
-                            <TableCell isHeader className="px-5 py-3 font-medium text-gray-500 text-start text-theme-xs dark:text-gray-400">
+                            <TableCell isHeader className="px-5 py-4 font-semibold text-gray-500 text-start text-theme-xs dark:text-gray-400">
                               Party
                             </TableCell>
-                            <TableCell isHeader className="px-5 py-3 font-medium text-gray-500 text-start text-theme-xs dark:text-gray-400">
+                            <TableCell isHeader className="px-5 py-4 font-semibold text-gray-500 text-start text-theme-xs dark:text-gray-400">
                               Table
                             </TableCell>
-                            <TableCell isHeader className="px-5 py-3 font-medium text-gray-500 text-start text-theme-xs dark:text-gray-400">
+                            <TableCell isHeader className="px-5 py-4 font-semibold text-gray-500 text-start text-theme-xs dark:text-gray-400">
                               Status
                             </TableCell>
-                            <TableCell isHeader className="px-5 py-3 font-medium text-gray-500 text-start text-theme-xs dark:text-gray-400">
+                            <TableCell isHeader className="px-5 py-4 font-semibold text-gray-500 text-start text-theme-xs dark:text-gray-400">
                               Notes
                             </TableCell>
-                            <TableCell isHeader className="px-5 py-3 font-medium text-gray-500 text-start text-theme-xs dark:text-gray-400">
+                            <TableCell isHeader className="px-5 py-4 font-semibold text-gray-500 text-start text-theme-xs dark:text-gray-400">
                               Staff Notes
                             </TableCell>
-                            <TableCell isHeader className="px-5 py-3 font-medium text-gray-500 text-end text-theme-xs dark:text-gray-400">
-                              Actions
+                            <TableCell isHeader className="whitespace-nowrap px-3 py-4 font-semibold text-gray-500 text-center text-theme-xs dark:text-gray-400">
+                              Reserve Sign
                             </TableCell>
                           </TableRow>
                         </TableHeader>
@@ -2307,8 +3648,11 @@ export default function BookingsPage() {
                               key={booking.id}
                               booking={booking}
                               statusValue={statusEdits[booking.id] || booking.status}
+                              tableMarkedValue={tableMarkEdits[booking.id]}
+                              isTableMarkSaving={tableMarkEdits[booking.id] !== undefined}
                               onStatusChange={(value) => saveStatus(booking, value)}
-                              onEdit={() => openEditModal(booking)}
+                              onTableMarkToggle={(value) => saveTableMark(booking, value)}
+                              onOpen={() => openBookingModal(booking)}
                             />
                           ))}
                         </TableBody>

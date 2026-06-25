@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Plus, Save, Trash2 } from "lucide-react";
 import { apiFetch, toJsonBody } from "../lib/api";
 import type { Area, TableRecord } from "../types";
-import { FieldLabel, FormMessage, SelectInput, inputClass } from "../components/resrva/FormField";
+import { FieldLabel, FormMessage, SelectInput, ToastMessage, inputClass } from "../components/resrva/FormField";
 import { LoadingState } from "../components/resrva/LoadingState";
 import { PageHeader } from "../components/resrva/PageHeader";
 import { Modal } from "../components/ui/modal";
@@ -378,7 +378,11 @@ export default function TablesAreasPage() {
     <>
       <PageHeader title="Tables / Areas" />
 
-      {message ? <div className="mb-5"><FormMessage type={message.type}>{message.text}</FormMessage></div> : null}
+      {message ? (
+        <ToastMessage type={message.type} onDismiss={() => setMessage(null)}>
+          {message.text}
+        </ToastMessage>
+      ) : null}
 
       <div className="tables-areas-layout">
         <div className="tables-areas-list">

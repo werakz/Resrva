@@ -3,7 +3,7 @@ import { Camera, LockKeyhole, Save, Trash2, Upload, UserRound } from "lucide-rea
 import { useAuth } from "../context/AuthContext";
 import { apiFetch, apiUpload, toJsonBody } from "../lib/api";
 import type { User } from "../types";
-import { FieldLabel, FormMessage, inputClass } from "../components/resrva/FormField";
+import { FieldLabel, ToastMessage, inputClass } from "../components/resrva/FormField";
 import { PageHeader } from "../components/resrva/PageHeader";
 
 type ProfileForm = {
@@ -120,6 +120,12 @@ export default function ProfilePage() {
     <>
       <PageHeader title="Edit profile" />
 
+      {message ? (
+        <ToastMessage type={message.type} onDismiss={() => setMessage(null)}>
+          {message.text}
+        </ToastMessage>
+      ) : null}
+
       <div className="grid gap-5 xl:grid-cols-[0.8fr_1.2fr]">
         <section className="rounded-2xl border border-gray-200 bg-white p-5 shadow-theme-xs dark:border-gray-800 dark:bg-white/[0.03]">
           <div className="flex flex-col items-center text-center">
@@ -180,8 +186,6 @@ export default function ProfilePage() {
           </div>
 
           <div className="space-y-5 p-5">
-            {message ? <FormMessage type={message.type}>{message.text}</FormMessage> : null}
-
             <div className="grid gap-4 sm:grid-cols-2">
               <div className="sm:col-span-2">
                 <FieldLabel htmlFor="profile-name">Name</FieldLabel>

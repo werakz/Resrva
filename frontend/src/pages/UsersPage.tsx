@@ -3,7 +3,7 @@ import { Plus, Save, Search, X } from "lucide-react";
 import { apiFetch, toJsonBody } from "../lib/api";
 import type { User } from "../types";
 import { useAuth } from "../context/AuthContext";
-import { FieldLabel, FormMessage, SelectInput, inputClass } from "../components/resrva/FormField";
+import { FieldLabel, FormMessage, SelectInput, ToastMessage, inputClass } from "../components/resrva/FormField";
 import { LoadingState } from "../components/resrva/LoadingState";
 import { PageHeader } from "../components/resrva/PageHeader";
 
@@ -136,7 +136,11 @@ export default function UsersPage() {
           <input className={`${inputClass} pl-10`} placeholder="Search" value={search} onChange={(event) => setSearch(event.target.value)} />
         </div>
 
-        {message ? <div className="mt-4"><FormMessage type={message.type}>{message.text}</FormMessage></div> : null}
+        {message ? (
+          <ToastMessage type={message.type} onDismiss={() => setMessage(null)}>
+            {message.text}
+          </ToastMessage>
+        ) : null}
 
         <div className="mt-4 overflow-x-auto">
           <table className="min-w-full divide-y divide-gray-200 text-sm">

@@ -796,15 +796,44 @@ function ensure_booking_customer_snapshots(): void
                  NULLIF(TRIM(SUBSTRING_INDEX(SUBSTRING(e.body, 4), ",", 1)), ""),
                  c.name
              ),
-             b.customer_email_snapshot = COALESCE(NULLIF(b.customer_email_snapshot, ""), e.recipient_email, c.email),
+             b.customer_email_snapshot = COALESCE(
+                 NULLIF(CASE WHEN b.customer_email_snapshot LIKE "no-email+%@resrva.local" THEN "" ELSE b.customer_email_snapshot END, ""),
+                 NULLIF(CASE WHEN e.recipient_email LIKE "no-email+%@resrva.local" THEN "" ELSE e.recipient_email END, ""),
+                 NULLIF(CASE WHEN c.email LIKE "no-email+%@resrva.local" THEN "" ELSE c.email END, "")
+             ),
              b.customer_phone_snapshot = COALESCE(NULLIF(b.customer_phone_snapshot, ""), c.phone)
          WHERE b.customer_name_snapshot IS NULL
             OR b.customer_name_snapshot = ""
             OR b.customer_email_snapshot IS NULL
             OR b.customer_email_snapshot = ""
+            OR b.customer_email_snapshot LIKE "no-email+%@resrva.local"
             OR b.customer_phone_snapshot IS NULL
             OR b.customer_phone_snapshot = ""'
     );
+
+    $checked = true;
+}
+
+function ensure_booking_staff_name_column(): void
+{
+    static $checked = false;
+    if ($checked) {
+        return;
+    }
+
+    add_column_if_missing('bookings', 'staff_name', 'VARCHAR(120) NULL AFTER staff_notes');
+
+    $checked = true;
+}
+
+function ensure_booking_table_marked_column(): void
+{
+    static $checked = false;
+    if ($checked) {
+        return;
+    }
+
+    add_column_if_missing('bookings', 'table_marked', 'TINYINT(1) NOT NULL DEFAULT 0 AFTER assigned_area_id');
 
     $checked = true;
 }
@@ -1303,8 +1332,9 @@ function ensure_booking_type_schema(): void
         db()->exec('ALTER TABLE bookings ADD COLUMN booking_session_id INT NULL AFTER booking_type_id');
     }
 
+    db()->exec("UPDATE bookings SET status = 'confirmed' WHERE status = 'approved'");
     db()->exec("ALTER TABLE bookings MODIFY booking_type ENUM('table', 'function', 'event') NOT NULL");
-    db()->exec("ALTER TABLE bookings MODIFY status ENUM('pending', 'confirmed', 'seated', 'completed', 'cancelled', 'no_show', 'approved', 'declined', 'waitlist') NOT NULL");
+    db()->exec("ALTER TABLE bookings MODIFY status ENUM('pending', 'waitlist', 'confirmed', 'seated', 'completed', 'cancelled', 'declined', 'no_show') NOT NULL");
 
     try {
         db()->exec('CREATE INDEX idx_bookings_booking_type_id ON bookings (booking_type_id)');
@@ -1980,6 +2010,40 @@ function public_booking_type_for_category(?int $bookingTypeId, string $category)
     }
 
     return $type;
+}
+
+function booking_record_type_for_booking_type(?array $bookingType, string $fallback = 'table'): string
+{
+    $category = (string) ($bookingType['category'] ?? '');
+    if ($category === 'dining') {
+        return 'table';
+    }
+    if ($category === 'function') {
+        return 'function';
+    }
+    if ($category === 'event' || $category === 'custom') {
+        return 'event';
+    }
+
+    return in_array($fallback, ['table', 'function', 'event'], true) ? $fallback : 'table';
+}
+
+function booking_type_reserved_area_ids(?array $bookingType): array
+{
+    $schedule = $bookingType['schedule'] ?? null;
+    if (!is_array($schedule)) {
+        return [];
+    }
+
+    if (isset($schedule['reserved_area_ids']) && is_array($schedule['reserved_area_ids'])) {
+        return normalized_area_ids($schedule['reserved_area_ids']);
+    }
+
+    if (!empty($schedule['reserved_area_ids_json'])) {
+        return decode_json_int_list($schedule['reserved_area_ids_json']);
+    }
+
+    return [];
 }
 
 function validate_dining_booking_type_time(array $bookingType, string $startTime): void
@@ -2682,19 +2746,28 @@ function require_online_booking_date_available(string $date): void
     }
 }
 
+function internal_customer_email_placeholder(): string
+{
+    return 'no-email+' . bin2hex(random_bytes(8)) . '@resrva.local';
+}
+
 function find_or_create_customer(array $data): int
 {
     $venueId = current_venue_id();
-    $email = strtolower(clean_string($data['email']));
-    $name = clean_string($data['name']);
-    $phone = clean_string($data['phone']);
+    $email = strtolower(clean_string($data['email'] ?? ''));
+    $name = clean_string($data['name'] ?? '');
+    $phone = clean_string($data['phone'] ?? '');
 
-    $stmt = db()->prepare('SELECT id FROM customers WHERE venue_id = :venue_id AND email = :email LIMIT 1');
-    $stmt->execute(['venue_id' => $venueId, 'email' => $email]);
-    $existingId = $stmt->fetchColumn();
+    if ($email !== '') {
+        $stmt = db()->prepare('SELECT id FROM customers WHERE venue_id = :venue_id AND email = :email LIMIT 1');
+        $stmt->execute(['venue_id' => $venueId, 'email' => $email]);
+        $existingId = $stmt->fetchColumn();
 
-    if ($existingId !== false) {
-        return (int) $existingId;
+        if ($existingId !== false) {
+            return (int) $existingId;
+        }
+    } else {
+        $email = internal_customer_email_placeholder();
     }
 
     $insert = db()->prepare('INSERT INTO customers (venue_id, name, email, phone, created_at, updated_at) VALUES (:venue_id, :name, :email, :phone, NOW(), NOW())');
@@ -2757,8 +2830,7 @@ function email_display_time(string $time): string
 function create_function_confirmation_email(array $booking, string $managerMessage = ''): void
 {
     $venueName = venue_display_name();
-    $status = (string) ($booking['status'] ?? 'confirmed');
-    $statusLabel = $status === 'approved' ? 'approved' : 'confirmed';
+    $statusLabel = 'confirmed';
     $name = (string) ($booking['customer_name'] ?? 'there');
     $reference = (string) ($booking['booking_reference'] ?? '');
     $areas = (string) ($booking['assigned_area_names'] ?? $booking['assigned_area_name'] ?? 'to be confirmed');
@@ -3104,7 +3176,7 @@ function blocked_function_area_ids(string $date, string $startTime, string $endT
          ) function_areas
          WHERE venue_id = :venue_id
            AND booking_type = "function"
-           AND status IN ("approved", "confirmed")
+           AND status IN ("confirmed", "seated", "completed")
            AND booking_date = :booking_date
            AND start_time < :end_time
            AND end_time > :start_time';
@@ -3889,7 +3961,7 @@ function validate_function_area_assignment(array $areaIds, string $date, string 
     $stmt->execute(array_merge([current_venue_id()], $clashingAreaIds));
     $areaNames = array_column($stmt->fetchAll(), 'name');
 
-    fail('One or more selected function areas already have an approved function at that time.', 409, [
+    fail('One or more selected function areas already have an active function at that time.', 409, [
         'area_ids' => $clashingAreaIds,
         'areas' => $areaNames,
     ]);
@@ -3968,56 +4040,115 @@ function log_ai_assignment(int $bookingId, array $recommendation, ?int $accepted
 
 function create_table_booking(array $data, ?array $manager = null): array
 {
-    require_fields($data, ['name', 'email', 'phone', 'date', 'time', 'guest_count']);
+    require_fields($data, $manager ? ['name', 'date', 'time', 'guest_count'] : ['name', 'email', 'phone', 'date', 'time', 'guest_count']);
 
     $venueId = current_venue_id($manager);
     $name = clean_string($data['name']);
-    $email = strtolower(clean_string($data['email']));
-    $phone = clean_string($data['phone']);
+    $email = strtolower(clean_string($data['email'] ?? ''));
+    $phone = clean_string($data['phone'] ?? '');
     $guestCount = (int) $data['guest_count'];
     $date = clean_string($data['date']);
     $time = clean_string($data['time']);
+    $endInput = clean_string($data['end_time'] ?? '');
     $notes = clean_string($data['notes'] ?? '');
     $staffNotes = $manager ? clean_string($data['staff_notes'] ?? '') : '';
+    $staffName = $manager ? clean_string($data['staff_name'] ?? '') : '';
     $preferredAreaId = $manager ? null : nullable_int($data['preferred_area_id'] ?? null);
-    $durationMinutes = (int) setting('default_duration_minutes', '120');
+    $durationMinutes = max((int) setting('default_duration_minutes', '120'), 15);
     $requestedBookingTypeId = nullable_int($data['booking_type_id'] ?? null);
-    $requestedBookingType = $manager === null
-        ? public_booking_type_for_category($requestedBookingTypeId, 'dining')
-        : null;
+    $requestedBookingType = null;
+    if ($requestedBookingTypeId !== null) {
+        if ($manager === null) {
+            $requestedBookingType = public_booking_type_for_category($requestedBookingTypeId, 'dining');
+        } else {
+            $requestedBookingType = find_booking_type_by_id($requestedBookingTypeId);
+            if (
+                !$requestedBookingType ||
+                (string) ($requestedBookingType['deleted_at'] ?? '') !== '' ||
+                (int) $requestedBookingType['is_active'] !== 1
+            ) {
+                fail('This booking type is not available for bookings.', 422);
+            }
+        }
+    }
+    $recordType = $requestedBookingType ? booking_record_type_for_booking_type($requestedBookingType, 'table') : 'table';
+    $requestedScheduleDuration = (int) ($requestedBookingType['schedule']['duration_minutes'] ?? 0);
+    if ($requestedScheduleDuration > 0) {
+        $durationMinutes = max($requestedScheduleDuration, 15);
+    }
+    if ($endInput !== '') {
+        $manualDurationMinutes = minutes_from_time(substr($endInput, 0, 5)) - minutes_from_time(substr($time, 0, 5));
+        if ($manualDurationMinutes <= 0) {
+            fail('End time must be after the start time.', 422, ['end_time' => $endInput]);
+        }
+        $durationMinutes = $manualDurationMinutes;
+    }
     $minGuests = $requestedBookingType ? (int) $requestedBookingType['min_guests'] : (int) setting('min_table_guests', '8');
     $maxGuests = $requestedBookingType ? nullable_int($requestedBookingType['max_guests'] ?? null) : (int) setting('max_table_guests', '29');
 
-    validate_email_address($email);
-    validate_phone_number($phone);
+    if ($manager === null || $email !== '') {
+        validate_email_address($email);
+    }
+    if ($manager === null || $phone !== '') {
+        validate_phone_number($phone);
+    }
 
     if ($manager === null) {
         require_online_booking_date_available($date);
     }
 
-    if ($guestCount < $minGuests) {
-        fail("Online bookings are for groups of {$minGuests} or more. Smaller groups are welcome to walk in.", 422);
+    if ($guestCount < 1) {
+        fail('Guest count must be at least 1.', 422);
     }
 
-    if ($maxGuests !== null && $guestCount > $maxGuests) {
-        if ($requestedBookingType) {
-            fail("{$requestedBookingType['name']} accepts up to {$maxGuests} guests.", 422);
+    if ($manager === null) {
+        if ($guestCount < $minGuests) {
+            fail("Online bookings are for groups of {$minGuests} or more. Smaller groups are welcome to walk in.", 422);
         }
-        fail("Groups over {$maxGuests} guests should use the function request form.", 422);
+
+        if ($maxGuests !== null && $guestCount > $maxGuests) {
+            if ($requestedBookingType) {
+                fail("{$requestedBookingType['name']} accepts up to {$maxGuests} guests.", 422);
+            }
+            fail("Groups over {$maxGuests} guests should use the function request form.", 422);
+        }
     }
 
     [$startTime, $endTime] = validate_booking_window($date, $time, $durationMinutes, $manager === null);
-    if ($requestedBookingType) {
+    if ($requestedBookingType && (string) $requestedBookingType['category'] === 'dining') {
         validate_dining_booking_type_time($requestedBookingType, $startTime);
     }
     $bookingTypeId = $requestedBookingType ? (int) $requestedBookingType['id'] : default_booking_type_id_for_table_time($startTime);
     $recommendation = null;
-    if ($manager) {
-        $recommendation = manual_table_assignment(normalized_table_ids($data['table_ids'] ?? []), $guestCount, $date, $startTime, $endTime);
+    $assignedAreaIds = [];
+    $assignedAreaId = null;
+    $eventType = in_array($recordType, ['function', 'event'], true)
+        ? clean_string($data['event_type'] ?? ($requestedBookingType['name'] ?? ''))
+        : null;
+    $tableMarked = $manager
+        ? bool_int($data['table_marked'] ?? false)
+        : 0;
+    if ($manager && in_array($recordType, ['table', 'event'], true)) {
+        $eventAllowedAreaIds = $recordType === 'event' ? booking_type_reserved_area_ids($requestedBookingType) : [];
+        $recommendation = manual_table_assignment(
+            normalized_table_ids($data['table_ids'] ?? []),
+            $guestCount,
+            $date,
+            $startTime,
+            $endTime,
+            null,
+            $eventAllowedAreaIds
+        );
+        $assignedAreaId = $recommendation['area_id'] ?? null;
+    } elseif ($manager && $recordType === 'function') {
+        $assignedAreaIds = normalized_area_ids($data['assigned_area_ids'] ?? []);
+        $assignedAreaId = $assignedAreaIds[0] ?? null;
+        validate_function_area_assignment($assignedAreaIds, $date, $startTime, $endTime);
     } elseif (setting_enabled('auto_assignment_enabled', true)) {
         $recommendation = recommend_tables($guestCount, $date, $startTime, $endTime, $preferredAreaId);
+        $assignedAreaId = $recommendation['area_id'] ?? null;
     }
-    $status = $recommendation !== null ? 'confirmed' : 'pending';
+    $status = $recordType === 'function' ? 'pending' : ($recommendation !== null ? 'confirmed' : 'pending');
     $customerId = find_or_create_customer(['name' => $name, 'email' => $email, 'phone' => $phone]);
     $reference = booking_reference();
 
@@ -4025,15 +4156,16 @@ function create_table_booking(array $data, ?array $manager = null): array
         'INSERT INTO bookings
             (venue_id, booking_reference, booking_type, booking_type_id, status, customer_id, customer_name_snapshot, customer_email_snapshot,
              customer_phone_snapshot, guest_count, booking_date, start_time, end_time, preferred_area_id,
-             assigned_area_id, notes, staff_notes, created_by_user_id, updated_by_user_id, created_at, updated_at)
+             assigned_area_id, table_marked, notes, staff_notes, staff_name, event_type, created_by_user_id, updated_by_user_id, created_at, updated_at)
          VALUES
-            (:venue_id, :reference, "table", :booking_type_id, :status, :customer_id, :customer_name, :customer_email, :customer_phone,
-             :guest_count, :booking_date, :start_time, :end_time, :preferred_area_id, :assigned_area_id, :notes,
-             :staff_notes, :created_by_user_id, :updated_by_user_id, NOW(), NOW())'
+            (:venue_id, :reference, :booking_type, :booking_type_id, :status, :customer_id, :customer_name, :customer_email, :customer_phone,
+             :guest_count, :booking_date, :start_time, :end_time, :preferred_area_id, :assigned_area_id, :table_marked,
+             :notes, :staff_notes, :staff_name, :event_type, :created_by_user_id, :updated_by_user_id, NOW(), NOW())'
     );
     $stmt->execute([
         'venue_id' => $venueId,
         'reference' => $reference,
+        'booking_type' => $recordType,
         'booking_type_id' => $bookingTypeId,
         'status' => $status,
         'customer_id' => $customerId,
@@ -4045,9 +4177,12 @@ function create_table_booking(array $data, ?array $manager = null): array
         'start_time' => $startTime,
         'end_time' => $endTime,
         'preferred_area_id' => $preferredAreaId,
-        'assigned_area_id' => $recommendation['area_id'] ?? null,
+        'assigned_area_id' => $assignedAreaId,
+        'table_marked' => $tableMarked,
         'notes' => $notes,
         'staff_notes' => $staffNotes,
+        'staff_name' => $staffName !== '' ? $staffName : null,
+        'event_type' => $eventType !== '' ? $eventType : null,
         'created_by_user_id' => $manager['id'] ?? null,
         'updated_by_user_id' => $manager['id'] ?? null,
     ]);
@@ -4056,28 +4191,47 @@ function create_table_booking(array $data, ?array $manager = null): array
     if ($recommendation !== null) {
         attach_tables_to_booking($bookingId, $recommendation['table_ids']);
         log_ai_assignment($bookingId, $recommendation, $manager['id'] ?? null, $manager !== null);
+    } elseif ($recordType === 'function') {
+        attach_function_areas_to_booking($bookingId, $assignedAreaIds);
     }
 
     $venueName = venue_display_name();
     $statusLabel = $status === 'confirmed' ? 'confirmed' : 'received';
-    $subject = "{$venueName} booking {$reference} {$statusLabel}";
-    $body = $recommendation !== null
-        ? "Hi {$name}, your table booking for {$guestCount} guests on {$date} at {$startTime} is confirmed. " .
-            "Your table area is {$recommendation['area_name']} and your reference is {$reference}."
-        : "Hi {$name}, your table booking for {$guestCount} guests on {$date} at {$startTime} has been received. " .
+    $serviceLabel = $requestedBookingType['name'] ?? ($recordType === 'function' ? 'function booking' : ($recordType === 'event' ? 'event booking' : 'table booking'));
+    $assignedArea = $recommendation['area_name'] ?? ($recordType === 'function' ? area_names_for_ids($assignedAreaIds) : 'to be assigned');
+    $subject = "{$venueName} {$serviceLabel} {$reference} {$statusLabel}";
+    if ($recommendation !== null) {
+        $body = "Hi {$name}, your {$serviceLabel} for {$guestCount} guests on {$date} at {$startTime} is confirmed. " .
+            "Your table area is {$recommendation['area_name']} and your reference is {$reference}.";
+    } elseif ($recordType === 'function') {
+        $areaText = $assignedArea !== '' ? $assignedArea : 'to be assigned';
+        $body = "Hi {$name}, your {$serviceLabel} for {$guestCount} guests on {$date} at {$startTime} has been received. " .
+            "Your function area is {$areaText}. Your reference is {$reference}.";
+    } else {
+        $body = "Hi {$name}, your {$serviceLabel} for {$guestCount} guests on {$date} at {$startTime} has been received. " .
             "A manager will assign your table before confirmation. Your reference is {$reference}.";
-    create_email_log($bookingId, $email, $subject, $body);
-    log_activity($manager['id'] ?? null, 'created', 'booking', $bookingId, ['reference' => $reference, 'source' => $manager ? 'manager' : 'public']);
+    }
+    $emailLogged = false;
+    if ($email !== '') {
+        create_email_log($bookingId, $email, $subject, $body);
+        $emailLogged = true;
+    }
+    $activityDetails = ['reference' => $reference, 'source' => $manager ? 'manager' : 'public'];
+    if ($staffName !== '') {
+        $activityDetails['staff_name'] = $staffName;
+    }
+    $activityEntityType = $recordType === 'function' ? 'function_booking' : ($recordType === 'event' ? 'event_booking' : 'booking');
+    log_activity($manager['id'] ?? null, 'created', $activityEntityType, $bookingId, $activityDetails);
 
     return [
         'id' => $bookingId,
         'booking_reference' => $reference,
         'status' => $status,
-        'assigned_area' => $recommendation['area_name'] ?? 'to be assigned',
+        'assigned_area' => $assignedArea !== '' ? $assignedArea : 'to be assigned',
         'assigned_tables' => $recommendation['table_numbers'] ?? [],
         'message' => $recommendation !== null
-            ? 'Booking confirmed and confirmation email logged.'
-            : 'Booking received and acknowledgement email logged.',
+            ? ($emailLogged ? 'Booking confirmed and confirmation email logged.' : 'Booking confirmed.')
+            : ($emailLogged ? 'Booking received and acknowledgement email logged.' : 'Booking received.'),
     ];
 }
 
@@ -4165,7 +4319,7 @@ function create_manager_function_booking(array $data, array $manager): array
     require_fields($data, ['name', 'email', 'phone', 'date', 'time', 'guest_count', 'event_type']);
 
     $venueId = current_venue_id($manager);
-    $allowedStatuses = ['pending', 'approved', 'confirmed', 'declined', 'cancelled'];
+    $allowedStatuses = ['pending', 'waitlist', 'confirmed', 'seated', 'completed', 'cancelled', 'declined', 'no_show'];
     $name = clean_string($data['name']);
     $email = strtolower(clean_string($data['email']));
     $phone = clean_string($data['phone']);
@@ -4175,8 +4329,10 @@ function create_manager_function_booking(array $data, array $manager): array
     $eventType = clean_string($data['event_type']);
     $notes = clean_string($data['notes'] ?? '');
     $staffNotes = clean_string($data['staff_notes'] ?? '');
+    $staffName = clean_string($data['staff_name'] ?? '');
     $managerMessage = clean_string($data['manager_message'] ?? '');
     $status = clean_string($data['status'] ?? 'pending');
+    $tableMarked = bool_int($data['table_marked'] ?? false);
     $assignedAreaIds = normalized_area_ids($data['assigned_area_ids'] ?? []);
     $assignedAreaId = $assignedAreaIds[0] ?? null;
     $durationMinutes = max((int) ($data['duration_minutes'] ?? 180), 120);
@@ -4184,8 +4340,8 @@ function create_manager_function_booking(array $data, array $manager): array
     validate_email_address($email);
     validate_phone_number($phone);
 
-    if ($guestCount < 8) {
-        fail('Function bookings must be for at least 8 guests.', 422);
+    if ($guestCount < 1) {
+        fail('Guest count must be at least 1.', 422);
     }
 
     if (!in_array($status, $allowedStatuses, true)) {
@@ -4195,7 +4351,7 @@ function create_manager_function_booking(array $data, array $manager): array
     [$startTime, $endTime] = validate_booking_window($date, $time, $durationMinutes);
     $bookingTypeId = default_function_booking_type_id();
 
-    if (in_array($status, ['approved', 'confirmed'], true)) {
+    if (in_array($status, ['confirmed', 'seated', 'completed'], true)) {
         validate_function_area_assignment($assignedAreaIds, $date, $startTime, $endTime);
     }
 
@@ -4205,12 +4361,12 @@ function create_manager_function_booking(array $data, array $manager): array
     $stmt = db()->prepare(
         'INSERT INTO bookings
             (venue_id, booking_reference, booking_type, booking_type_id, status, customer_id, customer_name_snapshot, customer_email_snapshot,
-             customer_phone_snapshot, guest_count, booking_date, start_time, end_time, assigned_area_id, notes,
-             staff_notes, event_type, manager_message, created_by_user_id, updated_by_user_id, created_at, updated_at)
+             customer_phone_snapshot, guest_count, booking_date, start_time, end_time, assigned_area_id, table_marked, notes,
+             staff_notes, staff_name, event_type, manager_message, created_by_user_id, updated_by_user_id, created_at, updated_at)
          VALUES
             (:venue_id, :reference, "function", :booking_type_id, :status, :customer_id, :customer_name, :customer_email, :customer_phone,
-             :guest_count, :booking_date, :start_time, :end_time, :assigned_area_id, :notes, :staff_notes,
-             :event_type, :manager_message, :created_by_user_id,
+             :guest_count, :booking_date, :start_time, :end_time, :assigned_area_id, :table_marked, :notes, :staff_notes,
+             :staff_name, :event_type, :manager_message, :created_by_user_id,
              :updated_by_user_id, NOW(), NOW())'
     );
     $stmt->execute([
@@ -4227,8 +4383,10 @@ function create_manager_function_booking(array $data, array $manager): array
         'start_time' => $startTime,
         'end_time' => $endTime,
         'assigned_area_id' => $assignedAreaId,
+        'table_marked' => $tableMarked,
         'notes' => $notes,
         'staff_notes' => $staffNotes,
+        'staff_name' => $staffName !== '' ? $staffName : null,
         'event_type' => $eventType,
         'manager_message' => $managerMessage,
         'created_by_user_id' => (int) $manager['id'],
@@ -4239,7 +4397,7 @@ function create_manager_function_booking(array $data, array $manager): array
     attach_function_areas_to_booking($bookingId, $assignedAreaIds);
     $booking = fetch_booking($bookingId);
 
-    if ($booking && in_array($status, ['approved', 'confirmed'], true)) {
+    if ($booking && $status === 'confirmed') {
         create_function_confirmation_email($booking, $managerMessage);
     } else {
         create_email_log(
@@ -4251,7 +4409,11 @@ function create_manager_function_booking(array $data, array $manager): array
                 : "Hi {$name}, your function booking for {$guestCount} guests on {$date} at {$startTime} has been created."
         );
     }
-    log_activity((int) $manager['id'], 'created', 'function_booking', $bookingId, ['reference' => $reference]);
+    $activityDetails = ['reference' => $reference];
+    if ($staffName !== '') {
+        $activityDetails['staff_name'] = $staffName;
+    }
+    log_activity((int) $manager['id'], 'created', 'function_booking', $bookingId, $activityDetails);
 
     return $booking ?: fetch_booking($bookingId);
 }
@@ -4265,7 +4427,7 @@ function booking_select_sql(?string $type): string
     return
         'SELECT b.*,
                 COALESCE(NULLIF(b.customer_name_snapshot, ""), c.name) AS customer_name,
-                COALESCE(NULLIF(b.customer_email_snapshot, ""), c.email) AS customer_email,
+                COALESCE(NULLIF(CASE WHEN b.customer_email_snapshot LIKE "no-email+%@resrva.local" THEN "" ELSE b.customer_email_snapshot END, ""), NULLIF(CASE WHEN c.email LIKE "no-email+%@resrva.local" THEN "" ELSE c.email END, "")) AS customer_email,
                 COALESCE(NULLIF(b.customer_phone_snapshot, ""), c.phone) AS customer_phone,
                 preferred.name AS preferred_area_name, assigned.name AS assigned_area_name,
                 btype.name AS booking_type_name, btype.category AS booking_type_category,
@@ -4316,8 +4478,94 @@ function normalize_booking_record(array $booking): array
     $eventReservedAreaIds = decode_json_int_list($booking['event_reserved_area_ids_json'] ?? null);
     $booking['event_reserved_area_ids'] = $eventReservedAreaIds !== [] ? implode(',', $eventReservedAreaIds) : null;
     $booking['event_reserved_area_names'] = $eventReservedAreaIds !== [] ? area_names_for_ids($eventReservedAreaIds) : null;
+    $booking['table_marked'] = (int) ($booking['table_marked'] ?? 0);
 
     return $booking;
+}
+
+function activity_blank_label(?string $value, string $fallback = '-'): string
+{
+    $value = trim((string) $value);
+
+    return $value !== '' ? $value : $fallback;
+}
+
+function activity_time_range_label(array $booking): string
+{
+    $start = email_display_time(substr((string) ($booking['start_time'] ?? ''), 0, 5));
+    $end = email_display_time(substr((string) ($booking['end_time'] ?? ''), 0, 5));
+
+    return activity_blank_label($start . ($end !== '' ? " - {$end}" : ''));
+}
+
+function activity_booking_type_label(array $booking): string
+{
+    return activity_blank_label(
+        (string) ($booking['booking_type_name'] ?? '')
+            ?: (string) ($booking['event_type'] ?? '')
+            ?: ucfirst((string) ($booking['booking_type'] ?? 'booking'))
+    );
+}
+
+function activity_table_label(array $booking): string
+{
+    return activity_blank_label((string) ($booking['table_numbers'] ?? ''), 'No table');
+}
+
+function activity_area_label(array $booking): string
+{
+    return activity_blank_label(
+        (string) ($booking['assigned_area_names'] ?? '')
+            ?: (string) ($booking['assigned_area_name'] ?? '')
+            ?: (string) ($booking['event_reserved_area_names'] ?? ''),
+        'Unassigned'
+    );
+}
+
+function activity_add_change(array &$changes, string $label, string $before, string $after): void
+{
+    $before = activity_blank_label($before);
+    $after = activity_blank_label($after);
+
+    if ($before === $after) {
+        return;
+    }
+
+    $changes[] = "{$label} changed from {$before} to {$after}";
+}
+
+function booking_update_change_summaries(array $before, array $after): array
+{
+    $changes = [];
+
+    activity_add_change($changes, 'Table', activity_table_label($before), activity_table_label($after));
+    activity_add_change($changes, 'Guests', (string) ($before['guest_count'] ?? ''), (string) ($after['guest_count'] ?? ''));
+    activity_add_change($changes, 'Status', str_replace('_', ' ', (string) ($before['status'] ?? '')), str_replace('_', ' ', (string) ($after['status'] ?? '')));
+    activity_add_change($changes, 'Date', email_display_date((string) ($before['booking_date'] ?? '')), email_display_date((string) ($after['booking_date'] ?? '')));
+    activity_add_change($changes, 'Time', activity_time_range_label($before), activity_time_range_label($after));
+    activity_add_change($changes, 'Booking type', activity_booking_type_label($before), activity_booking_type_label($after));
+    activity_add_change($changes, 'Event type', (string) ($before['event_type'] ?? ''), (string) ($after['event_type'] ?? ''));
+    activity_add_change($changes, 'Preferred area', (string) ($before['preferred_area_name'] ?? ''), (string) ($after['preferred_area_name'] ?? ''));
+    activity_add_change($changes, 'Area', activity_area_label($before), activity_area_label($after));
+    $beforeTableMarked = (int) ($before['table_marked'] ?? 0) === 1;
+    $afterTableMarked = (int) ($after['table_marked'] ?? 0) === 1;
+    if ($beforeTableMarked !== $afterTableMarked) {
+        $changes[] = $afterTableMarked ? 'Reserve Sign placed' : 'Reserve Sign cleared';
+    }
+    activity_add_change($changes, 'Guest name', (string) ($before['customer_name'] ?? ''), (string) ($after['customer_name'] ?? ''));
+    activity_add_change($changes, 'Guest phone', (string) ($before['customer_phone'] ?? ''), (string) ($after['customer_phone'] ?? ''));
+    activity_add_change($changes, 'Guest email', (string) ($before['customer_email'] ?? ''), (string) ($after['customer_email'] ?? ''));
+    if (trim((string) ($before['notes'] ?? '')) !== trim((string) ($after['notes'] ?? ''))) {
+        $changes[] = 'Guest notes updated';
+    }
+    if (trim((string) ($before['staff_notes'] ?? '')) !== trim((string) ($after['staff_notes'] ?? ''))) {
+        $changes[] = 'Staff notes updated';
+    }
+    if (trim((string) ($before['manager_message'] ?? '')) !== trim((string) ($after['manager_message'] ?? ''))) {
+        $changes[] = 'Manager message updated';
+    }
+
+    return array_values(array_unique($changes));
 }
 
 function list_bookings(?string $type): void
@@ -4368,7 +4616,7 @@ function list_bookings(?string $type): void
         $where .= ' AND (
             b.booking_reference LIKE :search_reference
             OR COALESCE(NULLIF(b.customer_name_snapshot, ""), c.name) LIKE :search_name
-            OR COALESCE(NULLIF(b.customer_email_snapshot, ""), c.email) LIKE :search_email
+            OR COALESCE(NULLIF(CASE WHEN b.customer_email_snapshot LIKE "no-email+%@resrva.local" THEN "" ELSE b.customer_email_snapshot END, ""), NULLIF(CASE WHEN c.email LIKE "no-email+%@resrva.local" THEN "" ELSE c.email END, "")) LIKE :search_email
             OR COALESCE(NULLIF(b.customer_phone_snapshot, ""), c.phone) LIKE :search_phone
         )';
         $searchTerm = '%' . clean_string($_GET['search']) . '%';
@@ -4409,15 +4657,27 @@ function update_booking(int $bookingId, array $data, array $manager): array
         fail('Booking not found.', 404);
     }
 
-    $allowedStatuses = ['pending', 'confirmed', 'seated', 'completed', 'cancelled', 'no_show', 'approved', 'declined', 'waitlist'];
+    $allowedStatuses = ['pending', 'waitlist', 'confirmed', 'seated', 'completed', 'cancelled', 'declined', 'no_show'];
     $status = clean_string($data['status'] ?? '');
     if ($status !== '' && !in_array($status, $allowedStatuses, true)) {
         fail('Unsupported booking status.', 422, ['status' => $status]);
     }
 
     $managerMessage = array_key_exists('manager_message', $data) ? clean_string($data['manager_message']) : '';
+    $staffName = array_key_exists('staff_name', $data) ? clean_string($data['staff_name']) : '';
+    $tableMarked = array_key_exists('table_marked', $data)
+        ? bool_int($data['table_marked'])
+        : (int) ($existing['table_marked'] ?? 0);
+    $bookingTypeId = array_key_exists('booking_type_id', $data)
+        ? nullable_int($data['booking_type_id'])
+        : nullable_int($existing['booking_type_id'] ?? null);
+    $existingBookingTypeId = nullable_int($existing['booking_type_id'] ?? null);
+    $selectedBookingType = $bookingTypeId !== null ? find_booking_type_by_id($bookingTypeId) : null;
+    $bookingTypeChanged = array_key_exists('booking_type_id', $data) && $bookingTypeId !== $existingBookingTypeId;
+    $nextBookingType = booking_record_type_for_booking_type($selectedBookingType, (string) $existing['booking_type']);
+
     $assignedAreaIds = [];
-    if ((string) $existing['booking_type'] === 'function') {
+    if ($nextBookingType === 'function') {
         $assignedAreaIds = array_key_exists('assigned_area_ids', $data)
             ? normalized_area_ids($data['assigned_area_ids'])
             : (
@@ -4441,26 +4701,53 @@ function update_booking(int $bookingId, array $data, array $manager): array
     $startInput = array_key_exists('time', $data)
         ? clean_string($data['time'])
         : substr((string) $existing['start_time'], 0, 5);
-    $durationMinutes = (int) setting('default_duration_minutes', '120');
-    if ((string) $existing['booking_type'] === 'function' && array_key_exists('duration_minutes', $data)) {
+    $endInput = array_key_exists('end_time', $data)
+        ? clean_string($data['end_time'])
+        : '';
+    $existingStartTime = substr((string) $existing['start_time'], 0, 5);
+    $existingEndTime = substr((string) $existing['end_time'], 0, 5);
+    $existingDurationMinutes = minutes_from_time($existingEndTime) - minutes_from_time($existingStartTime);
+    $durationMinutes = $existingDurationMinutes > 0
+        ? max($existingDurationMinutes, 15)
+        : max((int) setting('default_duration_minutes', '120'), 15);
+    if ($nextBookingType === 'function' && array_key_exists('duration_minutes', $data)) {
         $durationMinutes = max((int) $data['duration_minutes'], 120);
-    } elseif ((string) $existing['booking_type'] === 'function') {
-        $durationMinutes = max((minutes_from_time(substr((string) $existing['end_time'], 0, 5)) - minutes_from_time(substr((string) $existing['start_time'], 0, 5))), 120);
-    } elseif ((string) $existing['booking_type'] === 'event') {
-        $durationMinutes = max(
-            minutes_from_time(substr((string) $existing['end_time'], 0, 5)) - minutes_from_time(substr((string) $existing['start_time'], 0, 5)),
-            15
-        );
+    } elseif ($nextBookingType === 'function') {
+        $durationMinutes = max($durationMinutes, 120);
+    } elseif ($nextBookingType === 'event') {
+        $durationMinutes = max($durationMinutes, 15);
+    }
+    if ($endInput !== '') {
+        $manualDurationMinutes = minutes_from_time(substr($endInput, 0, 5)) - minutes_from_time(substr($startInput, 0, 5));
+        if ($manualDurationMinutes <= 0) {
+            fail('End time must be after the start time.', 422, ['end_time' => $endInput]);
+        }
+        $durationMinutes = $manualDurationMinutes;
     }
 
     [$startTime, $endTime] = validate_booking_window($bookingDate, $startInput, $durationMinutes);
 
-    if ((string) $existing['booking_type'] === 'table') {
-        $minGuests = (int) setting('min_table_guests', '8');
-        $maxGuests = (int) setting('max_table_guests', '29');
-        if ($guestCount < $minGuests || $guestCount > $maxGuests) {
-            fail("Table bookings must be between {$minGuests} and {$maxGuests} guests.", 422);
+    if ($bookingTypeChanged && $bookingTypeId !== null) {
+        if (
+            !$selectedBookingType ||
+            (string) ($selectedBookingType['deleted_at'] ?? '') !== '' ||
+            (int) $selectedBookingType['is_active'] !== 1
+        ) {
+            fail('This booking type is not available for this booking.', 422);
         }
+
+    }
+
+    if (
+        $selectedBookingType &&
+        (string) $selectedBookingType['category'] === 'dining' &&
+        ($bookingTypeChanged || array_key_exists('date', $data) || array_key_exists('time', $data))
+    ) {
+        validate_dining_booking_type_time($selectedBookingType, $startTime);
+    }
+
+    if ($guestCount < 1) {
+        fail('Guest count must be at least 1.', 422);
     }
 
     $customerSnapshotUpdate = null;
@@ -4468,9 +4755,13 @@ function update_booking(int $bookingId, array $data, array $manager): array
         $customerName = clean_string($data['name'] ?? $existing['customer_name']);
         $customerEmail = strtolower(clean_string($data['email'] ?? $existing['customer_email']));
         $customerPhone = clean_string($data['phone'] ?? $existing['customer_phone']);
-        require_fields(['name' => $customerName, 'email' => $customerEmail, 'phone' => $customerPhone], ['name', 'email', 'phone']);
-        validate_email_address($customerEmail);
-        validate_phone_number($customerPhone);
+        require_fields(['name' => $customerName], ['name']);
+        if ($customerEmail !== '') {
+            validate_email_address($customerEmail);
+        }
+        if ($customerPhone !== '') {
+            validate_phone_number($customerPhone);
+        }
 
         $customerSnapshotUpdate = [
             'customer_id' => find_or_create_customer(['name' => $customerName, 'email' => $customerEmail, 'phone' => $customerPhone]),
@@ -4484,9 +4775,16 @@ function update_booking(int $bookingId, array $data, array $manager): array
     $manualTableIds = $hasManualTableIds ? normalized_table_ids($data['table_ids']) : [];
     $manualRecommendation = null;
     $clearManualTables = false;
-    if (in_array((string) $existing['booking_type'], ['table', 'event'], true) && $hasManualTableIds) {
+    if (in_array($nextBookingType, ['table', 'event'], true) && $hasManualTableIds) {
         if ($manualTableIds !== []) {
-            $isEventBooking = (string) $existing['booking_type'] === 'event';
+            $isEventBooking = $nextBookingType === 'event';
+            $eventAllowedAreaIds = $isEventBooking ? booking_type_reserved_area_ids($selectedBookingType) : [];
+            if ($isEventBooking && $eventAllowedAreaIds === []) {
+                $eventAllowedAreaIds = event_reserved_area_ids_for_booking($existing);
+            }
+            $eventSessionId = $isEventBooking && !$bookingTypeChanged && (string) $existing['booking_type'] === 'event'
+                ? nullable_int($existing['booking_session_id'] ?? null)
+                : null;
             $manualRecommendation = manual_table_assignment(
                 $manualTableIds,
                 $guestCount,
@@ -4494,20 +4792,22 @@ function update_booking(int $bookingId, array $data, array $manager): array
                 $startTime,
                 $endTime,
                 $bookingId,
-                $isEventBooking ? event_reserved_area_ids_for_booking($existing) : [],
-                $isEventBooking ? nullable_int($existing['booking_session_id'] ?? null) : null
+                $eventAllowedAreaIds,
+                $eventSessionId
             );
             $assignedAreaId = (int) $manualRecommendation['area_id'];
-        } elseif ((string) $existing['booking_type'] === 'event') {
+        } elseif ($nextBookingType === 'event') {
             $assignedAreaId = null;
             $clearManualTables = true;
         }
     }
 
-    $shouldReassign = (string) $existing['booking_type'] === 'table'
+    $shouldReassign = $nextBookingType === 'table'
         && !$hasManualTableIds
         && (
-            $guestCount !== (int) $existing['guest_count']
+            $bookingTypeChanged
+            || (string) $existing['booking_type'] !== 'table'
+            || $guestCount !== (int) $existing['guest_count']
             || $bookingDate !== (string) $existing['booking_date']
             || $startTime !== substr((string) $existing['start_time'], 0, 5)
             || $preferredAreaId !== nullable_int($existing['preferred_area_id'])
@@ -4519,12 +4819,18 @@ function update_booking(int $bookingId, array $data, array $manager): array
         $assignedAreaId = (int) $recommendation['area_id'];
     }
 
+    $existingTableIds = normalized_table_ids(explode(',', (string) ($existing['table_ids'] ?? '')));
+    $hasTablesAfterUpdate = $nextBookingType !== 'function' && (
+        $recommendation !== null
+        || $manualRecommendation !== null
+        || (!$clearManualTables && ($hasManualTableIds ? $manualTableIds !== [] : $existingTableIds !== []))
+    );
+
     $nextStatus = $status !== '' ? $status : (string) $existing['status'];
     if (
-        (string) $existing['booking_type'] === 'event'
+        $nextBookingType === 'event'
         && !in_array($nextStatus, ['pending', 'waitlist', 'cancelled', 'declined', 'no_show'], true)
     ) {
-        $existingTableIds = normalized_table_ids(explode(',', (string) ($existing['table_ids'] ?? '')));
         $hasAssignedTables = $manualRecommendation !== null || (!$clearManualTables && $existingTableIds !== []);
         if (!$hasAssignedTables) {
             fail('Event bookings must be assigned to at least one table.', 422);
@@ -4532,8 +4838,8 @@ function update_booking(int $bookingId, array $data, array $manager): array
     }
 
     if (
-        (string) $existing['booking_type'] === 'function'
-        && in_array($nextStatus, ['approved', 'confirmed'], true)
+        $nextBookingType === 'function'
+        && in_array($nextStatus, ['confirmed', 'seated', 'completed'], true)
     ) {
         validate_function_area_assignment($assignedAreaIds, $bookingDate, $startTime, $endTime, $bookingId);
     }
@@ -4555,6 +4861,16 @@ function update_booking(int $bookingId, array $data, array $manager): array
         $params['customer_email_snapshot'] = $customerSnapshotUpdate['email'];
         $params['customer_phone_snapshot'] = $customerSnapshotUpdate['phone'];
     }
+    if (array_key_exists('booking_type_id', $data)) {
+        $updates[] = 'booking_type = :booking_type';
+        $updates[] = 'booking_type_id = :booking_type_id';
+        $updates[] = 'booking_session_id = :booking_session_id';
+        $params['booking_type'] = $nextBookingType;
+        $params['booking_type_id'] = $bookingTypeId;
+        $params['booking_session_id'] = $nextBookingType === 'event' && !$bookingTypeChanged && (string) $existing['booking_type'] === 'event'
+            ? nullable_int($existing['booking_session_id'] ?? null)
+            : null;
+    }
     if (array_key_exists('manager_message', $data)) {
         $updates[] = 'manager_message = :manager_message';
         $params['manager_message'] = $managerMessage;
@@ -4567,11 +4883,15 @@ function update_booking(int $bookingId, array $data, array $manager): array
         $updates[] = 'preferred_area_id = :preferred_area_id';
         $params['preferred_area_id'] = $preferredAreaId;
     }
+    if (array_key_exists('table_marked', $data)) {
+        $updates[] = 'table_marked = :table_marked';
+        $params['table_marked'] = $tableMarked;
+    }
     if (array_key_exists('guest_count', $data)) {
         $updates[] = 'guest_count = :guest_count';
         $params['guest_count'] = $guestCount;
     }
-    if (array_key_exists('date', $data) || array_key_exists('time', $data)) {
+    if (array_key_exists('date', $data) || array_key_exists('time', $data) || array_key_exists('end_time', $data)) {
         $updates[] = 'booking_date = :booking_date';
         $updates[] = 'start_time = :start_time';
         $updates[] = 'end_time = :end_time';
@@ -4587,6 +4907,10 @@ function update_booking(int $bookingId, array $data, array $manager): array
         $updates[] = 'staff_notes = :staff_notes';
         $params['staff_notes'] = clean_string($data['staff_notes']);
     }
+    if (array_key_exists('staff_name', $data)) {
+        $updates[] = 'staff_name = :staff_name';
+        $params['staff_name'] = $staffName !== '' ? $staffName : null;
+    }
     if (array_key_exists('event_type', $data)) {
         $updates[] = 'event_type = :event_type';
         $params['event_type'] = clean_string($data['event_type']);
@@ -4601,16 +4925,18 @@ function update_booking(int $bookingId, array $data, array $manager): array
     } elseif ($manualRecommendation !== null) {
         attach_tables_to_booking($bookingId, $manualRecommendation['table_ids']);
         log_ai_assignment($bookingId, $manualRecommendation, (int) $manager['id'], true);
-    } elseif ($clearManualTables) {
+    } elseif ($clearManualTables || $nextBookingType === 'function') {
         attach_tables_to_booking($bookingId, []);
     }
 
-    if ((string) $existing['booking_type'] === 'function' && (array_key_exists('assigned_area_ids', $data) || array_key_exists('assigned_area_id', $data))) {
+    if ($nextBookingType === 'function' && (array_key_exists('assigned_area_ids', $data) || array_key_exists('assigned_area_id', $data) || (string) $existing['booking_type'] !== 'function')) {
         attach_function_areas_to_booking($bookingId, $assignedAreaIds);
+    } elseif ($nextBookingType !== 'function' && (string) $existing['booking_type'] === 'function') {
+        attach_function_areas_to_booking($bookingId, []);
     }
 
     $booking = fetch_booking($bookingId);
-    if ($booking && $managerMessage !== '') {
+    if ($booking && $managerMessage !== '' && (string) ($booking['customer_email'] ?? '') !== '') {
         create_email_log(
             $bookingId,
             $booking['customer_email'],
@@ -4619,9 +4945,100 @@ function update_booking(int $bookingId, array $data, array $manager): array
         );
     }
 
-    log_activity((int) $manager['id'], 'updated', 'booking', $bookingId, ['status' => $status]);
+    $changes = $booking ? booking_update_change_summaries($existing, $booking) : [];
+    $activityDetails = [
+        'status' => $status,
+        'changes' => $changes,
+        'change_summary' => $changes !== [] ? implode('; ', $changes) : 'Booking updated',
+    ];
+    if ($staffName !== '') {
+        $activityDetails['staff_name'] = $staffName;
+    }
+    log_activity((int) $manager['id'], 'updated', 'booking', $bookingId, $activityDetails);
 
-    return fetch_booking($bookingId);
+    return $booking ?: fetch_booking($bookingId);
+}
+
+function bulk_update_reserve_signs(array $data, array $manager): array
+{
+    $date = clean_string($data['date'] ?? '');
+    validate_date_value($date);
+
+    $tableMarked = bool_int($data['table_marked'] ?? true);
+    $activeStatuses = ['pending', 'waitlist', 'confirmed', 'seated', 'completed'];
+    $statusPlaceholders = implode(',', array_fill(0, count($activeStatuses), '?'));
+    $venueId = current_venue_id($manager);
+    $bookingIds = [];
+    if (array_key_exists('booking_ids', $data) && is_array($data['booking_ids'])) {
+        $bookingIds = array_values(array_unique(array_filter(
+            array_map('intval', $data['booking_ids']),
+            static fn (int $id): bool => $id > 0
+        )));
+    }
+
+    if (array_key_exists('booking_ids', $data) && $bookingIds === []) {
+        return [
+            'updated' => 0,
+            'date' => $date,
+            'table_marked' => $tableMarked,
+        ];
+    }
+
+    $where = "venue_id = ?
+           AND booking_date = ?
+           AND status IN ({$statusPlaceholders})
+           AND table_marked <> ?";
+    $params = array_merge([$venueId, $date], $activeStatuses, [$tableMarked]);
+    if ($bookingIds !== []) {
+        $bookingIdPlaceholders = implode(',', array_fill(0, count($bookingIds), '?'));
+        $where .= " AND id IN ({$bookingIdPlaceholders})";
+        $params = array_merge($params, $bookingIds);
+    }
+
+    $select = db()->prepare(
+        "SELECT id, booking_reference, booking_type
+         FROM bookings
+         WHERE {$where}
+         ORDER BY start_time ASC, id ASC"
+    );
+    $select->execute($params);
+    $bookings = $select->fetchAll();
+
+    if ($bookings === []) {
+        return [
+            'updated' => 0,
+            'date' => $date,
+            'table_marked' => $tableMarked,
+        ];
+    }
+
+    $ids = array_map(static fn (array $booking): int => (int) $booking['id'], $bookings);
+    $idPlaceholders = implode(',', array_fill(0, count($ids), '?'));
+
+    $update = db()->prepare(
+        "UPDATE bookings
+         SET table_marked = ?, updated_by_user_id = ?, updated_at = NOW()
+         WHERE venue_id = ? AND id IN ({$idPlaceholders})"
+    );
+    $update->execute(array_merge([$tableMarked, (int) $manager['id'], $venueId], $ids));
+
+    foreach ($bookings as $booking) {
+        $entityType = match ((string) ($booking['booking_type'] ?? 'table')) {
+            'function' => 'function_booking',
+            'event' => 'event_booking',
+            default => 'booking',
+        };
+        log_activity((int) $manager['id'], 'updated', $entityType, (int) $booking['id'], [
+            'reference' => (string) $booking['booking_reference'],
+            'changes' => [$tableMarked === 1 ? 'Reserve Sign placed' : 'Reserve Sign cleared'],
+        ]);
+    }
+
+    return [
+        'updated' => count($ids),
+        'date' => $date,
+        'table_marked' => $tableMarked,
+    ];
 }
 
 function fetch_booking(int $bookingId): ?array
@@ -4629,7 +5046,7 @@ function fetch_booking(int $bookingId): ?array
     $sql =
         'SELECT b.*,
                 COALESCE(NULLIF(b.customer_name_snapshot, ""), c.name) AS customer_name,
-                COALESCE(NULLIF(b.customer_email_snapshot, ""), c.email) AS customer_email,
+                COALESCE(NULLIF(CASE WHEN b.customer_email_snapshot LIKE "no-email+%@resrva.local" THEN "" ELSE b.customer_email_snapshot END, ""), NULLIF(CASE WHEN c.email LIKE "no-email+%@resrva.local" THEN "" ELSE c.email END, "")) AS customer_email,
                 COALESCE(NULLIF(b.customer_phone_snapshot, ""), c.phone) AS customer_phone,
                 preferred.name AS preferred_area_name, assigned.name AS assigned_area_name,
                 btype.name AS booking_type_name, btype.category AS booking_type_category,
@@ -5527,6 +5944,8 @@ function attach_table_to_single_join_group(int $areaId, int $tableId): void
 
 try {
     ensure_booking_customer_snapshots();
+    ensure_booking_staff_name_column();
+    ensure_booking_table_marked_column();
     ensure_online_booking_blocks_table();
     ensure_user_avatar_column();
     ensure_multi_venue_schema();
@@ -6114,6 +6533,14 @@ try {
         respond($result, 201);
     }
 
+    if ($method === 'POST' && $route === 'bookings/reserve-signs/bulk') {
+        $manager = require_manager();
+        db()->beginTransaction();
+        $result = bulk_update_reserve_signs(json_body(), $manager);
+        db()->commit();
+        respond($result);
+    }
+
     if (($segments[0] ?? '') === 'bookings' && isset($segments[1], $segments[2]) && $segments[2] === 'reply-draft' && $method === 'POST') {
         $manager = require_manager();
         respond(generate_booking_reply_draft((int) $segments[1], json_body(), $manager));
@@ -6548,15 +6975,40 @@ try {
 
     if ($method === 'GET' && $route === 'activity-logs') {
         $manager = require_manager();
+        $params = ['venue_id' => current_venue_id($manager)];
+        $where = 'l.venue_id = :venue_id';
+        $limit = min(max((int) ($_GET['limit'] ?? 100), 1), 200);
+
+        if (isset($_GET['entity_id']) && clean_string($_GET['entity_id']) !== '') {
+            $where .= ' AND l.entity_id = :entity_id';
+            $params['entity_id'] = (int) $_GET['entity_id'];
+        }
+
+        if (isset($_GET['entity_type']) && clean_string($_GET['entity_type']) !== '') {
+            $where .= ' AND l.entity_type = :entity_type';
+            $params['entity_type'] = clean_string($_GET['entity_type']);
+        } elseif (isset($_GET['entity_types']) && clean_string($_GET['entity_types']) !== '') {
+            $types = array_values(array_filter(array_map('clean_string', explode(',', (string) $_GET['entity_types']))));
+            if ($types !== []) {
+                $placeholders = [];
+                foreach ($types as $index => $type) {
+                    $key = 'entity_type_' . $index;
+                    $placeholders[] = ':' . $key;
+                    $params[$key] = $type;
+                }
+                $where .= ' AND l.entity_type IN (' . implode(', ', $placeholders) . ')';
+            }
+        }
+
         $stmt = db()->prepare(
             'SELECT l.*, u.name AS user_name
              FROM activity_logs l
              LEFT JOIN users u ON u.id = l.user_id
-             WHERE l.venue_id = :venue_id
+             WHERE ' . $where . '
              ORDER BY l.created_at DESC
-             LIMIT 100'
+             LIMIT ' . $limit
         );
-        $stmt->execute(['venue_id' => current_venue_id($manager)]);
+        $stmt->execute($params);
         $items = $stmt->fetchAll();
         respond(['items' => $items]);
     }

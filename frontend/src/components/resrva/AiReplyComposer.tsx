@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Mail, Save, Sparkles, X } from "lucide-react";
 import { apiFetch, toJsonBody } from "../../lib/api";
@@ -8,13 +8,13 @@ import { FieldLabel, FormMessage, SelectInput, inputClass, textareaClass } from 
 export type ReplyPurpose = "confirm" | "update" | "decline" | "request_info";
 
 export function replyPurposeForStatus(status: string): ReplyPurpose {
-  if (status === "confirmed" || status === "approved") return "confirm";
+  if (status === "confirmed") return "confirm";
   if (status === "declined") return "decline";
   return "update";
 }
 
 export function statusNeedsCustomerNotice(status: string): boolean {
-  return ["confirmed", "approved", "declined", "cancelled"].includes(status);
+  return ["confirmed", "declined", "cancelled"].includes(status);
 }
 
 type ReplyDraft = {
@@ -35,11 +35,13 @@ export function AiReplyComposer({
   booking,
   onLogged,
   openRequest,
+  buttonLabel = "Draft reply",
   buttonClassName = "inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-brand-200 bg-brand-50 px-4 text-sm font-medium text-brand-700 hover:bg-brand-100 dark:border-brand-500/20 dark:bg-brand-500/15 dark:text-brand-300",
 }: {
   booking: Booking;
   onLogged?: () => void | Promise<void>;
   openRequest?: { token: number; purpose?: ReplyPurpose };
+  buttonLabel?: string;
   buttonClassName?: string;
 }) {
   const [isOpen, setIsOpen] = useState(false);
@@ -50,10 +52,18 @@ export function AiReplyComposer({
   const [drafting, setDrafting] = useState(false);
   const [logging, setLogging] = useState(false);
   const [message, setMessage] = useState<{ type: "error" | "success" | "info"; text: string } | null>(null);
+  const handledOpenTokenRef = useRef<number | null>(null);
+  const draftRequestRef = useRef(0);
+  const subjectEditedRef = useRef(false);
+  const bodyEditedRef = useRef(false);
 
   const defaultPurpose = useCallback((): ReplyPurpose => replyPurposeForStatus(booking.status), [booking.status]);
 
   const generateDraft = useCallback(async (draftPurpose = purpose, draftInstructions = instructions) => {
+    const requestId = draftRequestRef.current + 1;
+    draftRequestRef.current = requestId;
+    subjectEditedRef.current = false;
+    bodyEditedRef.current = false;
     setDrafting(true);
     setMessage(null);
 
@@ -62,12 +72,21 @@ export function AiReplyComposer({
         method: "POST",
         ...toJsonBody({ purpose: draftPurpose, instructions: draftInstructions }),
       });
-      setSubject(draft.subject);
-      setBody(draft.body);
+      if (requestId !== draftRequestRef.current) return;
+      if (!subjectEditedRef.current) {
+        setSubject(draft.subject);
+      }
+      if (!bodyEditedRef.current) {
+        setBody(draft.body);
+      }
     } catch (error) {
-      setMessage({ type: "error", text: error instanceof Error ? error.message : "Reply could not be drafted." });
+      if (requestId === draftRequestRef.current) {
+        setMessage({ type: "error", text: error instanceof Error ? error.message : "Reply could not be drafted." });
+      }
     } finally {
-      setDrafting(false);
+      if (requestId === draftRequestRef.current) {
+        setDrafting(false);
+      }
     }
   }, [booking.id, instructions, purpose]);
 
@@ -85,7 +104,9 @@ export function AiReplyComposer({
 
   useEffect(() => {
     if (!openRequest) return;
+    if (handledOpenTokenRef.current === openRequest.token) return;
 
+    handledOpenTokenRef.current = openRequest.token;
     openComposer(openRequest.purpose);
   }, [openComposer, openRequest]);
 
@@ -116,7 +137,7 @@ export function AiReplyComposer({
     <>
       <button type="button" onClick={() => openComposer()} className={buttonClassName}>
         <Sparkles className="size-4" />
-        Draft reply
+        {buttonLabel}
       </button>
 
       {isOpen && typeof document !== "undefined" ? createPortal(
@@ -195,7 +216,10 @@ export function AiReplyComposer({
                       id={`ai-reply-subject-${booking.id}`}
                       className={inputClass}
                       value={subject}
-                      onChange={(event) => setSubject(event.target.value)}
+                      onChange={(event) => {
+                        subjectEditedRef.current = true;
+                        setSubject(event.target.value);
+                      }}
                     />
                   </div>
 
@@ -205,7 +229,10 @@ export function AiReplyComposer({
                       id={`ai-reply-body-${booking.id}`}
                       className={`${textareaClass} min-h-[220px] font-mono text-sm leading-6`}
                       value={body}
-                      onChange={(event) => setBody(event.target.value)}
+                      onChange={(event) => {
+                        bodyEditedRef.current = true;
+                        setBody(event.target.value);
+                      }}
                     />
                   </div>
 

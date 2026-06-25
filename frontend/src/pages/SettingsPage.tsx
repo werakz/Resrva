@@ -5,7 +5,7 @@ import type { Instance as FlatpickrInstance } from "flatpickr/dist/types/instanc
 import { CalendarDays, ChevronRight, ImageIcon, Save, Trash2, Upload, X } from "lucide-react";
 import { apiFetch, apiUpload, toJsonBody } from "../lib/api";
 import type { MetaPayload, OpeningHour } from "../types";
-import { FieldLabel, FormMessage, SelectInput, inputClass, textareaClass } from "../components/resrva/FormField";
+import { FieldLabel, FormMessage, SelectInput, ToastMessage, inputClass, textareaClass } from "../components/resrva/FormField";
 import { LoadingState } from "../components/resrva/LoadingState";
 import { PageHeader } from "../components/resrva/PageHeader";
 
@@ -690,9 +690,9 @@ export default function SettingsPage() {
       <PageHeader title={headerTitle} action={headerAction} />
 
       {message ? (
-        <div className="mb-5">
-          <FormMessage type={message.type}>{message.text}</FormMessage>
-        </div>
+        <ToastMessage type={message.type} onDismiss={() => setMessage(null)}>
+          {message.text}
+        </ToastMessage>
       ) : null}
 
       {renderActivePanel()}

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Building2, ExternalLink, Plus, Save, Search } from "lucide-react";
 import { apiFetch, toJsonBody } from "../lib/api";
 import { useAuth } from "../context/AuthContext";
@@ -8,6 +8,7 @@ import {
   FormMessage,
   MultiSelectInput,
   SelectInput,
+  ToastMessage,
   inputClass,
 } from "../components/resrva/FormField";
 import { LoadingState } from "../components/resrva/LoadingState";
@@ -118,7 +119,7 @@ export default function VenuesPage() {
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<{ type: "error" | "success"; text: string } | null>(null);
 
-  const loadVenues = async () => {
+  const loadVenues = useCallback(async () => {
     const [payload, clientsPayload] = await Promise.all([
       apiFetch<{ items: Venue[]; current_venue: Venue | null }>("venues"),
       apiFetch<{ items: Account[] }>("accounts"),
@@ -132,13 +133,13 @@ export default function VenuesPage() {
         setForm(venueToForm(startingVenue));
       }
     }
-  };
+  }, [isCreating, selectedVenueId]);
 
   useEffect(() => {
     loadVenues().catch((error) => {
       setMessage({ type: "error", text: error instanceof Error ? error.message : "Venues failed to load." });
     });
-  }, []);
+  }, [loadVenues]);
 
   const selectedVenue = useMemo(
     () => venues?.find((venue) => venue.id === selectedVenueId) || null,
@@ -325,7 +326,11 @@ export default function VenuesPage() {
         }
       />
 
-      {message ? <div className="mb-4"><FormMessage type={message.type}>{message.text}</FormMessage></div> : null}
+      {message ? (
+        <ToastMessage type={message.type} onDismiss={() => setMessage(null)}>
+          {message.text}
+        </ToastMessage>
+      ) : null}
 
       {!selectedVenue && !isCreating ? (
         <section className="rounded-lg border border-gray-200 bg-white p-5 shadow-theme-sm">

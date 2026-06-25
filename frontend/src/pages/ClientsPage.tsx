@@ -1,10 +1,10 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { BriefcaseBusiness, LifeBuoy, Plus, Save, Search } from "lucide-react";
 import { useNavigate } from "react-router";
 import { apiFetch, toJsonBody } from "../lib/api";
 import { useAuth } from "../context/AuthContext";
 import type { Account, Venue } from "../types";
-import { FieldLabel, FormMessage, SelectInput, inputClass } from "../components/resrva/FormField";
+import { FieldLabel, FormMessage, SelectInput, ToastMessage, inputClass } from "../components/resrva/FormField";
 import { LoadingState } from "../components/resrva/LoadingState";
 import { PageHeader } from "../components/resrva/PageHeader";
 
@@ -104,27 +104,20 @@ export default function ClientsPage() {
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<{ type: "error" | "success"; text: string } | null>(null);
 
-  const loadClients = async () => {
+  const loadClients = useCallback(async () => {
     const [accountsPayload, venuesPayload] = await Promise.all([
       apiFetch<{ items: Account[] }>("accounts"),
       apiFetch<{ items: Venue[] }>("platform/venues"),
     ]);
     setClients(accountsPayload.items);
     setVenues(venuesPayload.items);
-    if (!selectedClientId && !isCreating) {
-      const startingClient = accountsPayload.items[0] || null;
-      if (startingClient) {
-        setSelectedClientId(startingClient.id);
-        setForm(accountToForm(startingClient));
-      }
-    }
-  };
+  }, []);
 
   useEffect(() => {
     loadClients().catch((error) => {
       setMessage({ type: "error", text: error instanceof Error ? error.message : "Clients failed to load." });
     });
-  }, []);
+  }, [loadClients]);
 
   const selectedClient = useMemo(
     () => clients?.find((client) => client.id === selectedClientId) || null,
@@ -278,7 +271,11 @@ export default function ClientsPage() {
         }
       />
 
-      {message ? <div className="mb-4"><FormMessage type={message.type}>{message.text}</FormMessage></div> : null}
+      {message ? (
+        <ToastMessage type={message.type} onDismiss={() => setMessage(null)}>
+          {message.text}
+        </ToastMessage>
+      ) : null}
 
       {!selectedClient && !isCreating ? (
         <section className="rounded-lg border border-gray-200 bg-white p-5 shadow-theme-sm">

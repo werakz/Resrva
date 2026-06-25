@@ -195,10 +195,12 @@ export type Booking = {
   assigned_area_names?: string | null;
   table_ids?: string | null;
   table_numbers?: string | null;
+  table_marked?: number | boolean | null;
   event_type?: string | null;
   custom_answers_summary?: string | null;
   notes?: string | null;
   staff_notes?: string | null;
+  staff_name?: string | null;
   manager_message?: string | null;
   created_at?: string;
   updated_at?: string;

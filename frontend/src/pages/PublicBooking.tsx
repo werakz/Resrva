@@ -75,7 +75,7 @@ type TimeOption = {
 };
 
 function todayIso() {
-  return new Date().toISOString().slice(0, 10);
+  return toIsoDate(new Date());
 }
 
 function toIsoDate(date: Date) {
@@ -107,6 +107,20 @@ function selectedDateParts(iso: string) {
     year: date.getFullYear(),
     label: shortDate(toIsoDate(date)),
   };
+}
+
+function parseAnnualClosedMonthDays(value: string): Set<string> {
+  return new Set(
+    value
+      .split(",")
+      .map((date) => date.trim())
+      .filter((date) => /^\d{2}-\d{2}$/.test(date)),
+  );
+}
+
+function monthDayFromIso(iso: string): string {
+  const [, month = "", day = ""] = iso.split("-");
+  return `${month}-${day}`;
 }
 
 function minutesFromTime(time: string) {
@@ -159,6 +173,10 @@ function buildTimeOptions(
   const interval = Math.max(Number(meta?.settings.slot_interval_minutes || 30), 15);
   const duration = serviceType?.category === "function" ? 180 : Number(meta?.settings.default_duration_minutes || 120);
   const latestStart = closeMinutes - duration;
+  const minimumNotice = Math.max(Number(meta?.settings.minimum_booking_notice_minutes || 0), 0);
+  const now = new Date();
+  const minimumStart =
+    date === todayIso() ? now.getHours() * 60 + now.getMinutes() + minimumNotice : Number.NEGATIVE_INFINITY;
   const schedule = serviceType?.category === "dining" ? serviceType.schedule : null;
   const serviceStart = schedule?.start_time
     ? minutesFromTime(schedule.start_time)
@@ -170,7 +188,7 @@ function buildTimeOptions(
     : serviceType?.slug === "lunch"
       ? Math.min(17 * 60 - interval, latestStart)
     : latestStart;
-  const start = Math.max(openMinutes, serviceStart);
+  const start = Math.max(openMinutes, serviceStart, minimumStart);
   const end = Math.min(latestStart, serviceEnd);
 
   if (end < start) {
@@ -200,6 +218,15 @@ function displaySession(session: BookingSession) {
   const time = end ? `${start} - ${end}` : start;
 
   return `${label} - ${time}`;
+}
+
+function venueInitials(name: string): string {
+  return name
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0]?.toUpperCase())
+    .join("") || "R";
 }
 
 function sessionAvailabilityLabel(session: BookingSession) {
@@ -265,7 +292,7 @@ function buildCalendarDays(monthDate: Date): CalendarDay[] {
   start.setDate(first.getDate() - mondayOffset);
   const today = todayIso();
 
-  return Array.from({ length: 35 }, (_, index) => {
+  return Array.from({ length: 42 }, (_, index) => {
     const date = new Date(start);
     date.setDate(start.getDate() + index);
     const iso = toIsoDate(date);
@@ -315,12 +342,14 @@ function CalendarPanel({
   selectedDate,
   visibleMonth,
   blockedDates,
+  annualClosedMonthDays,
   onMonthChange,
   onSelectDate,
 }: {
   selectedDate: string;
   visibleMonth: Date;
   blockedDates: Set<string>;
+  annualClosedMonthDays: Set<string>;
   onMonthChange: (date: Date) => void;
   onSelectDate: (date: string) => void;
 }) {
@@ -370,8 +399,9 @@ function CalendarPanel({
             const selectedClass = day.iso === selectedDate ? "is-selected" : "";
             const todayClass = day.iso === todayIso() ? "is-today" : "";
             const mutedClass = !day.currentMonth ? "is-muted" : "";
-            const blockedClass = blockedDates.has(day.iso) ? "is-blocked" : "";
-            const disabled = day.disabled || blockedDates.has(day.iso);
+            const isBlocked = blockedDates.has(day.iso) || annualClosedMonthDays.has(monthDayFromIso(day.iso));
+            const blockedClass = isBlocked ? "is-blocked" : "";
+            const disabled = day.disabled || isBlocked;
 
             return (
               <button
@@ -495,6 +525,13 @@ export default function PublicBooking() {
     () => new Set((meta?.online_booking_blocks || []).map((block) => block.block_date)),
     [meta],
   );
+  const annualClosedMonthDays = useMemo(
+    () =>
+      parseAnnualClosedMonthDays(
+        meta?.settings.annual_closed_days || meta?.settings.annual_closed_day || "",
+      ),
+    [meta],
+  );
   const tableBookingsEnabled = (meta?.settings.online_table_bookings_enabled ?? "1") !== "0";
   const functionRequestsEnabled = (meta?.settings.online_function_requests_enabled ?? "1") !== "0";
   const serviceEnabled = useCallback(
@@ -559,6 +596,9 @@ export default function PublicBooking() {
     if (blockedOnlineDateSet.has(form.date)) {
       return "Online bookings are turned off for this date.";
     }
+    if (annualClosedMonthDays.has(monthDayFromIso(form.date))) {
+      return "The venue is closed on this date each year.";
+    }
     if (!form.service) {
       return "Please choose a service.";
     }
@@ -578,6 +618,7 @@ export default function PublicBooking() {
     return null;
   }, [
     blockedOnlineDateSet,
+    annualClosedMonthDays,
     form.booking_session_id,
     form.date,
     form.service,
@@ -897,7 +938,7 @@ export default function PublicBooking() {
         {venueImageUrl ? (
           <img src={venueImageUrl} alt={venueName} className="public-booking-venue-image" />
         ) : (
-          <div className="public-booking-logo">OCI</div>
+          <div className="public-booking-logo">{venueInitials(venueName)}</div>
         )}
         <p className="public-booking-name">{venueName}</p>
       </header>
@@ -949,6 +990,7 @@ export default function PublicBooking() {
                 selectedDate={form.date}
                 visibleMonth={visibleMonth}
                 blockedDates={blockedOnlineDateSet}
+                annualClosedMonthDays={annualClosedMonthDays}
                 onMonthChange={setVisibleMonth}
                 onSelectDate={(date) => updateField("date", date)}
               />

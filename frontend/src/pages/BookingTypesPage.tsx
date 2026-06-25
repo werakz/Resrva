@@ -12,12 +12,24 @@ import {
 import { apiFetch, toJsonBody } from "../lib/api";
 import { bookingIconOptions, getBookingIcon } from "../lib/bookingTypeIcons";
 import type { Area, BookingCustomField, BookingType, BookingTypeSchedule, MetaPayload, TableRecord } from "../types";
-import { FieldLabel, FormMessage, MultiSelectInput, SelectInput, inputClass, textareaClass } from "../components/resrva/FormField";
+import { FieldLabel, MultiSelectInput, SelectInput, ToastMessage, inputClass, textareaClass } from "../components/resrva/FormField";
 import { LoadingState } from "../components/resrva/LoadingState";
 import { PageHeader } from "../components/resrva/PageHeader";
 import { Modal } from "../components/ui/modal";
 
 const dayLabels = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+
+const advanceNoticeOptions = [
+  { value: "0", label: "No minimum" },
+  { value: "30", label: "30 minutes" },
+  { value: "60", label: "1 hour" },
+  { value: "120", label: "2 hours" },
+  { value: "240", label: "4 hours" },
+  { value: "720", label: "12 hours" },
+  { value: "1440", label: "1 day" },
+  { value: "2880", label: "2 days" },
+  { value: "10080", label: "1 week" },
+];
 
 type RecurrenceType = BookingTypeSchedule["recurrence_type"];
 type BookingTypePanel = "overview" | "setup" | "schedule" | "areas" | "capacity" | "questions" | "upcoming" | "additional";
@@ -1203,6 +1215,17 @@ export default function BookingTypesPage() {
           <FieldLabel htmlFor="max-guests">Max guests per booking</FieldLabel>
           <input id="max-guests" type="number" min="1" placeholder="No limit" className={inputClass} value={form.max_guests} onChange={(event) => updateForm("max_guests", event.target.value)} />
         </div>
+        {form.category === "event" ? (
+          <div>
+            <FieldLabel htmlFor="booking-cutoff">Minimum advance notice</FieldLabel>
+            <SelectInput
+              id="booking-cutoff"
+              value={form.booking_cutoff_minutes}
+              onChange={(value) => updateForm("booking_cutoff_minutes", value)}
+              options={advanceNoticeOptions}
+            />
+          </div>
+        ) : null}
       </div>
       <div className="mt-5 grid gap-3">
         <ToggleRow label="Auto Confirmation" checked={form.auto_confirm} onChange={updateAutoConfirmation} />
@@ -1331,10 +1354,6 @@ export default function BookingTypesPage() {
             />
           </div>
         ) : null}
-        <div>
-          <FieldLabel htmlFor="booking-cutoff">Minimum advance notice</FieldLabel>
-          <input id="booking-cutoff" type="number" min="0" className={inputClass} value={form.booking_cutoff_minutes} onChange={(event) => updateForm("booking_cutoff_minutes", event.target.value)} />
-        </div>
       </div>
       {form.id ? (
         <div className="mt-6 border-t border-gray-200 pt-5">
@@ -1500,9 +1519,9 @@ export default function BookingTypesPage() {
       <PageHeader title={headerTitle} action={headerAction} />
 
       {message ? (
-        <div className="mb-5">
-          <FormMessage type={message.type}>{message.text}</FormMessage>
-        </div>
+        <ToastMessage type={message.type} onDismiss={() => setMessage(null)}>
+          {message.text}
+        </ToastMessage>
       ) : null}
 
       {selectedId === null ? (
